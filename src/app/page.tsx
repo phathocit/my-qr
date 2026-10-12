@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Device, Product, Party, WarrantyCase } from '@/types/database';
 import { inventoryService } from '@/lib/inventoryService';
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import ScannerModal from '@/components/ScannerModal';
 
 type Tab = 'search' | 'inbound' | 'outbound' | 'warranty' | 'inventory';
@@ -12,6 +13,14 @@ export default function HomePage() {
   const [isMock, setIsMock] = useState(true);
   const [loading, setLoading] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+
+  // Authentication State
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [loginEmail, setLoginEmail] = useState('hatranduyphat2004@gmail.com');
+  const [loginPassword, setLoginPassword] = useState('Admin@123456');
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   // Core Data
   const [products, setProducts] = useState<Product[]>([]);
@@ -112,8 +121,73 @@ export default function HomePage() {
   };
 
   useEffect(() => {
-    refreshData();
+    const initAuth = async () => {
+      if (isSupabaseConfigured()) {
+        try {
+          const supabase = createClient();
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.user) {
+            setCurrentUser(session.user);
+            await refreshData();
+          }
+        } catch (e) {
+          console.error('Lỗi kiểm tra session:', e);
+        }
+      } else {
+        await refreshData();
+      }
+      setCheckingAuth(false);
+    };
+    initAuth();
   }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    setIsLoggingIn(true);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        throw new Error(result.error || 'Đăng nhập không thành công');
+      }
+
+      const supabase = createClient();
+      const { data, error } = await supabase.auth.verifyOtp({
+        token_hash: result.token_hash,
+        type: 'magiclink',
+      });
+
+      if (error || !data.session) {
+        throw new Error(error?.message || 'Không thể thiết lập phiên xác thực');
+      }
+
+      setCurrentUser(data.session.user);
+      showNotice(`Đăng nhập thành công với quyền quản trị: ${result.email}`, 'success');
+      await refreshData();
+    } catch (err: any) {
+      setLoginError(err.message || 'Lỗi đăng nhập');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (isSupabaseConfigured()) {
+      const supabase = createClient();
+      await supabase.auth.signOut();
+    }
+    setCurrentUser(null);
+    setProducts([]);
+    setParties([]);
+    setDevices([]);
+    setWarrantyCases([]);
+    showNotice('Đã đăng xuất tài khoản.', 'info');
+  };
 
   const showNotice = (text: string, type: 'success' | 'error' | 'info' = 'success') => {
     setNotification({ text, type });
@@ -481,6 +555,81 @@ export default function HomePage() {
     }
   };
 
+  if (checkingAuth) {
+    return (
+      <div className="app-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: 36, height: 36, border: '3px solid rgba(255,255,255,0.2)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+          <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Đang kiểm tra kết nối hệ thống...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser && isSupabaseConfigured()) {
+    return (
+      <div className="app-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: 16 }}>
+        <div className="card" style={{ maxWidth: 440, width: '100%', padding: '28px 24px' }}>
+          <div style={{ textAlign: 'center', marginBottom: 24 }}>
+            <div style={{ fontSize: '2.5rem', marginBottom: 8 }}>🔐</div>
+            <h2 style={{ fontSize: '1.35rem', fontWeight: 700, margin: '0 0 6px 0' }}>Đăng Nhập Quản Trị Kho</h2>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 6, alignItems: 'center', marginTop: 4 }}>
+              <span className="env-badge success">Supabase Cloud</span>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Bảo mật Row Level Security</span>
+            </div>
+          </div>
+
+          {loginError && (
+            <div className="toast-notice error" style={{ marginBottom: 16 }}>
+              ✕ {loginError}
+            </div>
+          )}
+
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div>
+              <label className="form-label" style={{ marginBottom: 6, display: 'block' }}>Email Quản trị viên:</label>
+              <input
+                type="email"
+                className="input"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                placeholder="admin@example.com"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="form-label" style={{ marginBottom: 6, display: 'block' }}>Mật khẩu Quản trị:</label>
+              <input
+                type="password"
+                className="input"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={isLoggingIn}
+              style={{ width: '100%', padding: '12px', fontSize: '0.95rem', fontWeight: 600, marginTop: 4 }}
+            >
+              {isLoggingIn ? 'Đang xác thực bảo mật...' : 'Đăng Nhập Vào Kho'}
+            </button>
+          </form>
+
+          <div style={{ marginTop: 20, padding: 12, borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+            <div><strong>Tài khoản quản trị viên:</strong></div>
+            <div>• Email: <code>hatranduyphat2004@gmail.com</code></div>
+            <div>• Mật khẩu: <code>Admin@123456</code></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       {/* Header */}
@@ -488,11 +637,21 @@ export default function HomePage() {
         <div className="app-title">
           <span>📦 Quản Lý Thiết Bị CNTT</span>
         </div>
-        <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {isMock ? (
             <span className="env-badge warning">Demo Local (Mock)</span>
           ) : (
             <span className="env-badge success">Supabase Cloud</span>
+          )}
+          {currentUser && (
+            <button
+              onClick={handleLogout}
+              className="btn btn-secondary"
+              style={{ fontSize: '0.75rem', padding: '4px 8px' }}
+              title="Đăng xuất khỏi hệ thống"
+            >
+              🚪 Thoát
+            </button>
           )}
         </div>
       </header>
