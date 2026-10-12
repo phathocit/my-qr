@@ -22,10 +22,13 @@ export default function ScannerModal({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
   const [detectedCode, setDetectedCode] = useState<string | null>(null);
+  const [engineUsed, setEngineUsed] = useState<'Native BarcodeDetector' | 'ZXing Client Library' | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const zxingReaderRef = useRef<any>(null);
+  const isHandlingDetectionRef = useRef(false);
 
   useEffect(() => {
     if (!isOpen) {
@@ -33,6 +36,8 @@ export default function ScannerModal({
       setCapturedPhoto(null);
       setDetectedCode(null);
       setCameraError(null);
+      setEngineUsed(null);
+      isHandlingDetectionRef.current = false;
       return;
     }
 
@@ -45,9 +50,10 @@ export default function ScannerModal({
 
   const startCamera = async () => {
     setCameraError(null);
+    isHandlingDetectionRef.current = false;
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setCameraError('Trình duyệt không hỗ trợ truy cập camera hoặc đang chạy HTTP.');
+        setCameraError('Trình duyệt không hỗ trợ Web Camera hoặc đang chạy giao thức không an toàn (cần HTTPS).');
         return;
       }
 
@@ -59,13 +65,13 @@ export default function ScannerModal({
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        await videoRef.current.play();
         setCameraActive(true);
         startScanningLoop();
       }
     } catch (err: any) {
       console.warn('Camera access denied or failed:', err);
-      setCameraError('Không thể mở camera (vui lòng cấp quyền camera hoặc nhập mã thủ công).');
+      setCameraError('Không thể mở camera. Vui lòng cấp quyền truy cập hoặc nhập mã thủ công.');
     }
   };
 
@@ -73,6 +79,12 @@ export default function ScannerModal({
     if (scanIntervalRef.current) {
       clearInterval(scanIntervalRef.current);
       scanIntervalRef.current = null;
+    }
+    if (zxingReaderRef.current) {
+      try {
+        zxingReaderRef.current.reset();
+      } catch {}
+      zxingReaderRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
@@ -93,37 +105,71 @@ export default function ScannerModal({
     return canvas.toDataURL('image/jpeg', 0.85);
   };
 
-  const startScanningLoop = () => {
-    // Check if BarcodeDetector is available natively
+  const onCodeFound = (code: string) => {
+    if (isHandlingDetectionRef.current) return;
+    isHandlingDetectionRef.current = true;
+
+    // Freeze camera and capture current frame
+    const photo = captureFrame();
+    stopCamera();
+
+    setDetectedCode(code.trim());
+    if (photo) setCapturedPhoto(photo);
+  };
+
+  const startScanningLoop = async () => {
     const BarcodeDetectorClass = (window as any).BarcodeDetector;
-    if (!BarcodeDetectorClass) {
-      return; // Fallback to manual entry / photo capture
+
+    // 1. Check if Native BarcodeDetector is available
+    if (BarcodeDetectorClass) {
+      try {
+        let supportedFormats = ['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8'];
+        if (typeof BarcodeDetectorClass.getSupportedFormats === 'function') {
+          try {
+            const available = await BarcodeDetectorClass.getSupportedFormats();
+            if (Array.isArray(available) && available.length > 0) {
+              supportedFormats = available;
+            }
+          } catch {}
+        }
+
+        const barcodeDetector = new BarcodeDetectorClass({ formats: supportedFormats });
+        setEngineUsed('Native BarcodeDetector');
+
+        scanIntervalRef.current = setInterval(async () => {
+          if (!videoRef.current || videoRef.current.readyState < 2 || isHandlingDetectionRef.current) return;
+          try {
+            const barcodes = await barcodeDetector.detect(videoRef.current);
+            if (barcodes.length > 0 && barcodes[0].rawValue) {
+              onCodeFound(barcodes[0].rawValue);
+            }
+          } catch {}
+        }, 300);
+        return;
+      } catch (e) {
+        console.warn('Native BarcodeDetector initialization failed, falling back to ZXing', e);
+      }
     }
 
+    // 2. Client-side Fallback using @zxing/library (loaded dynamically on-demand)
     try {
-      const barcodeDetector = new BarcodeDetectorClass({
-        formats: ['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e'],
-      });
+      setEngineUsed('ZXing Client Library');
+      const { BrowserMultiFormatReader } = await import('@zxing/library');
+      const reader = new BrowserMultiFormatReader();
+      zxingReaderRef.current = reader;
 
-      scanIntervalRef.current = setInterval(async () => {
-        if (!videoRef.current || videoRef.current.readyState < 2) return;
-        try {
-          const barcodes = await barcodeDetector.detect(videoRef.current);
-          if (barcodes.length > 0) {
-            const raw = barcodes[0].rawValue;
-            if (raw) {
-              const photo = captureFrame();
-              stopCamera();
-              setDetectedCode(raw);
-              if (photo) setCapturedPhoto(photo);
-            }
+      if (!videoRef.current) return;
+
+      reader.decodeFromVideoElement(videoRef.current, (result, error) => {
+        if (result && !isHandlingDetectionRef.current) {
+          const text = result.getText();
+          if (text) {
+            onCodeFound(text);
           }
-        } catch {
-          // Ignore frame decode errors
         }
-      }, 400);
-    } catch {
-      // Ignored
+      });
+    } catch (err) {
+      console.warn('Failed to load @zxing/library scanner fallback', err);
     }
   };
 
@@ -144,6 +190,7 @@ export default function ScannerModal({
   const handleRescan = () => {
     setDetectedCode(null);
     setCapturedPhoto(null);
+    isHandlingDetectionRef.current = false;
     startCamera();
   };
 
@@ -153,7 +200,14 @@ export default function ScannerModal({
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{title}</h3>
+          <div>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{title}</h3>
+            {engineUsed && (
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                Bộ giải mã: {engineUsed}
+              </span>
+            )}
+          </div>
           <button
             onClick={onClose}
             style={{
@@ -169,16 +223,19 @@ export default function ScannerModal({
           </button>
         </div>
 
-        {/* Viewfinder or Preview */}
+        {/* Viewfinder or Frozen Frame Preview */}
         {detectedCode ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div className="toast-notice info">
               <span>Đã quét được mã: <strong>{detectedCode}</strong></span>
             </div>
             {capturedPhoto && (
-              <div style={{ borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+              <div style={{ borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '2px solid var(--primary)', position: 'relative' }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={capturedPhoto} alt="Captured frame" style={{ width: '100%', height: 'auto', display: 'block' }} />
+                <div style={{ position: 'absolute', bottom: 6, right: 6, background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: '0.7rem', padding: '2px 6px', borderRadius: 4 }}>
+                  Khung hình đối chiếu
+                </div>
               </div>
             )}
             <div style={{ display: 'flex', gap: 8 }}>
@@ -196,7 +253,7 @@ export default function ScannerModal({
               style={{
                 position: 'relative',
                 width: '100%',
-                height: 240,
+                height: 250,
                 background: '#000',
                 borderRadius: 'var(--radius-sm)',
                 overflow: 'hidden',
@@ -222,9 +279,9 @@ export default function ScannerModal({
                 <div
                   style={{
                     position: 'absolute',
-                    width: '70%',
-                    height: '50%',
-                    border: '2px solid rgba(59, 130, 246, 0.8)',
+                    width: '75%',
+                    height: '55%',
+                    border: '2px solid rgba(59, 130, 246, 0.85)',
                     borderRadius: 8,
                     boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.45)',
                     pointerEvents: 'none',
@@ -249,7 +306,7 @@ export default function ScannerModal({
                   if (photo) setCapturedPhoto(photo);
                 }}
               >
-                📸 Chụp ảnh tem đối chiếu
+                📸 Chụp lại ảnh tem đối chiếu
               </button>
             )}
           </div>
@@ -257,8 +314,8 @@ export default function ScannerModal({
 
         {/* Manual Input Fallback */}
         {allowManual && (
-          <form onSubmit={handleManualSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-            <div className="form-label">Hoặc nhập SN / Mã quản lý thủ công:</div>
+          <form onSubmit={handleManualSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+            <div className="form-label">Nhập SN / Mã quản lý thủ công:</div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input
                 type="text"
