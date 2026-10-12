@@ -94,21 +94,30 @@ export class StorageService {
 
     const storageKey = uploadData.path;
 
-    // 2. Insert record into evidence_photos
-    const { error: dbErr } = await supabase.from('evidence_photos').insert({
-      entity_type: params.entityType,
-      entity_id: params.entityId,
-      device_id: params.deviceId || null,
-      storage_key: storageKey,
-      performer: params.performer || 'Admin',
-      watermark_meta: {
-        server_timestamp: new Date().toISOString(),
+    // 2. Insert record into evidence_photos với cơ chế rollback dọn dẹp file rác
+    try {
+      const { error: dbErr } = await supabase.from('evidence_photos').insert({
         entity_type: params.entityType,
         entity_id: params.entityId,
-      },
-    });
+        device_id: params.deviceId || null,
+        storage_key: storageKey,
+        performer: params.performer || 'Admin',
+        watermark_meta: {
+          server_timestamp: new Date().toISOString(),
+          entity_type: params.entityType,
+          entity_id: params.entityId,
+        },
+      });
 
-    if (dbErr) console.warn('Failed to insert evidence_photos record:', dbErr);
+      if (dbErr) {
+        // Rollback: Xóa file khỏi storage nếu lưu record thất bại để tránh file mồ côi
+        await supabase.storage.from(this.bucket).remove([storageKey]).catch(() => {});
+        throw new Error(`Lỗi lưu dữ liệu ảnh bằng chứng: ${dbErr.message}`);
+      }
+    } catch (err) {
+      await supabase.storage.from(this.bucket).remove([storageKey]).catch(() => {});
+      throw err;
+    }
 
     // 3. Generate 1-hour signed URL for secure viewing
     const { data: signedData } = await supabase.storage
@@ -120,6 +129,17 @@ export class StorageService {
       storageKey,
       signedUrl: signedData?.signedUrl,
     };
+  }
+
+  // Dọn dẹp file rác khỏi storage khi các bước nghiệp vụ kế tiếp bị thất bại
+  async cleanupOrphanedUpload(storageKey: string): Promise<void> {
+    if (!isSupabaseConfigured() || storageKey.startsWith('mock/')) return;
+    const supabase = createClient();
+    try {
+      await supabase.storage.from(this.bucket).remove([storageKey]);
+    } catch (err) {
+      console.warn('Cảnh báo: Không thể dọn dẹp file storage:', storageKey, err);
+    }
   }
 
   // Get signed URL for an existing storage key
