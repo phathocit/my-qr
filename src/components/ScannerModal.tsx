@@ -160,14 +160,20 @@ export default function ScannerModal({
 
       if (!videoRef.current) return;
 
-      reader.decodeFromVideoElement(videoRef.current, (result, error) => {
-        if (result && !isHandlingDetectionRef.current) {
-          const text = result.getText();
-          if (text) {
-            onCodeFound(text);
+      scanIntervalRef.current = setInterval(async () => {
+        if (!videoRef.current || videoRef.current.readyState < 2 || isHandlingDetectionRef.current) return;
+        try {
+          const result = await reader.decodeFromVideoElement(videoRef.current);
+          if (result) {
+            const text = result.getText();
+            if (text) {
+              onCodeFound(text);
+            }
           }
+        } catch {
+          // Frame without barcode - ignored
         }
-      });
+      }, 350);
     } catch (err) {
       console.warn('Failed to load @zxing/library scanner fallback', err);
     }
