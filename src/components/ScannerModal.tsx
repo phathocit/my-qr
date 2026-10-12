@@ -33,8 +33,11 @@ export default function ScannerModal({
   const zxingReaderRef = useRef<any>(null);
   const isHandlingDetectionRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const facingModeRef = useRef<'environment' | 'user'>('environment');
 
-  // Dừng camera
+  facingModeRef.current = facingMode;
+
+  // Dừng toàn bộ camera stream & scanner loop
   const stopCamera = useCallback(() => {
     if (scanIntervalRef.current) {
       clearInterval(scanIntervalRef.current);
@@ -61,22 +64,26 @@ export default function ScannerModal({
     setIsLoadingCamera(false);
   }, []);
 
-  // Chụp khung hình hiện tại từ video element
+  // Chụp lại khung hình video hiện tại để đối chiếu
   const captureFrame = useCallback((): string | null => {
     if (!videoRef.current) return null;
     const video = videoRef.current;
     if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.85);
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.85);
+    } catch {
+      return null;
+    }
   }, []);
 
-  // Khi tìm thấy mã hợp lệ
+  // Khi tìm thấy mã barcode/QR
   const onCodeFound = useCallback((code: string, customPhoto?: string) => {
     if (isHandlingDetectionRef.current) return;
     isHandlingDetectionRef.current = true;
@@ -84,7 +91,7 @@ export default function ScannerModal({
     const trimmed = code.trim();
     if (!trimmed) return;
 
-    // Đóng băng khung hình camera để đối chiếu
+    // Chụp lại khung hình đối chiếu rồi dừng camera
     const photo = customPhoto || captureFrame();
     stopCamera();
 
@@ -94,9 +101,14 @@ export default function ScannerModal({
 
   // Vòng lặp giải mã Barcode/QR
   const startScanningLoop = useCallback(async () => {
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
+
     const BarcodeDetectorClass = (window as any).BarcodeDetector;
 
-    // 1. Thử dùng BarcodeDetector phần cứng trình duyệt
+    // 1. Thử BarcodeDetector native của trình duyệt
     if (BarcodeDetectorClass) {
       try {
         let supportedFormats = ['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8'];
@@ -123,11 +135,11 @@ export default function ScannerModal({
         }, 250);
         return;
       } catch (e) {
-        console.warn('Native BarcodeDetector init failed, fallback to ZXing', e);
+        console.warn('Native BarcodeDetector init failed, falling back to ZXing', e);
       }
     }
 
-    // 2. Dự phòng client-side bằng @zxing/library
+    // 2. Dự phòng bằng @zxing/library
     try {
       setEngineUsed('ZXing Engine (Client)');
       const { BrowserMultiFormatReader } = await import('@zxing/library');
@@ -142,7 +154,7 @@ export default function ScannerModal({
             onCodeFound(result.getText());
           }
         } catch {
-          // Frame chưa có barcode - bỏ qua
+          // Frame chưa có barcode
         }
       }, 300);
     } catch (err) {
@@ -150,9 +162,20 @@ export default function ScannerModal({
     }
   }, [onCodeFound]);
 
-  // Khởi động Camera với cơ chế chống màn hình đen
-  const startCamera = useCallback(async (mode: 'environment' | 'user' = facingMode) => {
-    stopCamera();
+  // Khởi động Camera (Độc lập, không phụ thuộc vào state re-render)
+  const startCamera = useCallback(async (mode?: 'environment' | 'user') => {
+    const targetMode = mode || facingModeRef.current;
+    
+    // Tắt camera cũ nếu đang chạy
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
+
     setCameraError(null);
     setIsLoadingCamera(true);
     isHandlingDetectionRef.current = false;
@@ -163,30 +186,27 @@ export default function ScannerModal({
       return;
     }
 
-    // Kiểm tra số lượng camera
+    // Kiểm tra số lượng camera để hiển thị nút đổi camera
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoDevices = devices.filter((d) => d.kind === 'videoinput');
       setHasMultipleCameras(videoDevices.length > 1);
     } catch {}
 
-    // Cấu hình constraints thích ứng
+    // Cấu hình constraints thích ứng theo thứ tự từ chuẩn đến tối giản
     const constraintsList: MediaStreamConstraints[] = [
-      // 1. Thử camera sau với độ phân giải linh hoạt
       {
         video: {
-          facingMode: { ideal: mode },
-          width: { ideal: 1280, max: 1920 },
-          height: { ideal: 720, max: 1080 },
+          facingMode: { ideal: targetMode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
         },
         audio: false,
       },
-      // 2. Dự phòng: chỉ chỉ định facingMode
       {
-        video: { facingMode: mode },
+        video: { facingMode: targetMode },
         audio: false,
       },
-      // 3. Dự phòng tối thượng: bật bất kỳ video stream nào có sẵn
       {
         video: true,
         audio: false,
@@ -209,8 +229,8 @@ export default function ScannerModal({
       console.warn('Tất cả cấu hình camera đều thất bại:', lastError);
       setCameraError(
         lastError?.name === 'NotAllowedError'
-          ? 'Quyền truy cập camera bị từ chối. Vui lòng cho phép quyền camera trong cài đặt trình duyệt.'
-          : 'Không thể kích hoạt camera. Bạn có thể bấm "Chụp ảnh từ Camera máy" hoặc nhập mã thủ công.'
+          ? 'Quyền truy cập camera bị từ chối. Vui lòng bật quyền camera trong cài đặt trình duyệt.'
+          : 'Không thể khởi động camera. Bạn có thể bấm "Chụp ảnh bằng máy" hoặc nhập mã thủ công.'
       );
       setIsLoadingCamera(false);
       return;
@@ -218,48 +238,29 @@ export default function ScannerModal({
 
     streamRef.current = stream;
 
-    // Gán vào thẻ video và đợi sự kiện play
+    // Gán stream vào video element
     const video = videoRef.current;
     if (video) {
       video.srcObject = stream;
+      video.setAttribute('playsinline', 'true');
+      video.setAttribute('webkit-playsinline', 'true');
+      video.setAttribute('autoplay', 'true');
+      video.setAttribute('muted', 'true');
       video.muted = true;
 
-      // Hàm kích hoạt phát video an toàn (xử lý cả iOS Safari & Android Chrome)
-      const playVideo = async () => {
-        try {
-          await video.play();
-          setCameraActive(true);
-          setIsLoadingCamera(false);
-          startScanningLoop();
-        } catch (playErr) {
-          console.warn('Lỗi video.play(), thử lại lần 2:', playErr);
-          try {
-            video.muted = true;
-            await video.play();
-            setCameraActive(true);
-            setIsLoadingCamera(false);
-            startScanningLoop();
-          } catch {
-            setCameraError('Trình duyệt chặn tự động phát luồng video.');
-            setIsLoadingCamera(false);
-          }
-        }
-      };
-
-      if (video.readyState >= 2) {
-        await playVideo();
-      } else {
-        video.onloadedmetadata = () => {
-          playVideo();
-        };
-        video.oncanplay = () => {
-          if (!cameraActive) playVideo();
-        };
+      try {
+        await video.play();
+        setCameraActive(true);
+        setIsLoadingCamera(false);
+        startScanningLoop();
+      } catch (playErr) {
+        console.warn('video.play() promise rejected, waiting for onplaying event:', playErr);
+        // Trình duyệt sẽ kích hoạt sự kiện onPlaying / onLoadedMetadata bên dưới
       }
     }
-  }, [facingMode, startScanningLoop, stopCamera, cameraActive]);
+  }, [startScanningLoop]);
 
-  // Quét Barcode từ File ảnh (Tải lên hoặc Chụp bằng Camera hệ điều hành)
+  // Quét Barcode từ File ảnh (Tải lên hoặc Chụp bằng Camera hệ thống)
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -279,7 +280,7 @@ export default function ScannerModal({
       img.onload = async () => {
         let foundCode: string | null = null;
 
-        // 1. Thử bằng Native BarcodeDetector
+        // 1. Thử BarcodeDetector
         const BarcodeDetectorClass = (window as any).BarcodeDetector;
         if (BarcodeDetectorClass) {
           try {
@@ -291,7 +292,7 @@ export default function ScannerModal({
           } catch {}
         }
 
-        // 2. Thử bằng ZXing
+        // 2. Thử ZXing
         if (!foundCode) {
           try {
             const { BrowserMultiFormatReader } = await import('@zxing/library');
@@ -324,23 +325,23 @@ export default function ScannerModal({
     startCamera(newMode);
   };
 
+  // CHỈ THEO DÕI isOpen: Tránh premature cleanup do re-render
   useEffect(() => {
-    if (!isOpen) {
-      stopCamera();
+    if (isOpen) {
       setCapturedPhoto(null);
       setDetectedCode(null);
       setCameraError(null);
-      setEngineUsed(null);
       isHandlingDetectionRef.current = false;
-      return;
+      startCamera();
+    } else {
+      stopCamera();
     }
-
-    startCamera('environment');
 
     return () => {
       stopCamera();
     };
-  }, [isOpen, startCamera, stopCamera]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -360,7 +361,7 @@ export default function ScannerModal({
     setDetectedCode(null);
     setCapturedPhoto(null);
     isHandlingDetectionRef.current = false;
-    startCamera(facingMode);
+    startCamera();
   };
 
   if (!isOpen) return null;
@@ -392,7 +393,7 @@ export default function ScannerModal({
           </button>
         </div>
 
-        {/* Viewfinder hoặc Khung hình đối chiếu đã đóng băng */}
+        {/* Khung hình đối chiếu sau khi quét thành công */}
         {detectedCode ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div className="toast-notice info">
@@ -422,8 +423,8 @@ export default function ScannerModal({
               style={{
                 position: 'relative',
                 width: '100%',
-                height: 260,
-                background: '#090d16',
+                height: 280,
+                backgroundColor: '#090d16',
                 borderRadius: 'var(--radius-sm)',
                 overflow: 'hidden',
                 display: 'flex',
@@ -431,12 +432,22 @@ export default function ScannerModal({
                 justifyContent: 'center',
               }}
             >
-              {/* Thẻ Video: Luôn render trong DOM, có đầy đủ thuộc tính cho Safari iOS */}
+              {/* Thẻ Video: Luôn render trong DOM, không bao giờ dùng display: none */}
               <video
                 ref={videoRef}
                 autoPlay
                 playsInline
                 muted
+                onLoadedMetadata={() => {
+                  if (videoRef.current) {
+                    videoRef.current.play().catch(() => {});
+                  }
+                }}
+                onPlaying={() => {
+                  setIsLoadingCamera(false);
+                  setCameraActive(true);
+                  startScanningLoop();
+                }}
                 style={{
                   width: '100%',
                   height: '100%',
@@ -445,7 +456,7 @@ export default function ScannerModal({
                 }}
               />
 
-              {/* Lớp phủ Trạng thái Loading hoặc Lỗi */}
+              {/* Lớp phủ Trạng thái Đang kết nối camera */}
               {isLoadingCamera && (
                 <div
                   style={{
@@ -462,12 +473,12 @@ export default function ScannerModal({
                     zIndex: 5,
                   }}
                 >
-                  <div style={{ width: 24, height: 24, border: '3px solid rgba(255,255,255,0.3)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                  <div style={{ width: 28, height: 28, border: '3px solid rgba(255,255,255,0.3)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
                   <span>Đang kết nối camera...</span>
                 </div>
               )}
 
-              {/* Viewfinder Target Box khi Camera đang hoạt động */}
+              {/* Viewfinder Khung ngắm quét mã khi Camera đã sẵn sàng */}
               {cameraActive && !isLoadingCamera && (
                 <div
                   style={{
@@ -485,17 +496,18 @@ export default function ScannerModal({
                 </div>
               )}
 
+              {/* Thông báo lỗi khi camera không khả dụng */}
               {cameraError && (
                 <div style={{ position: 'absolute', inset: 0, padding: 16, textAlign: 'center', color: '#fca5a5', fontSize: '0.85rem', background: 'rgba(15, 23, 42, 0.95)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, zIndex: 6 }}>
                   <div>{cameraError}</div>
-                  <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }} onClick={() => startCamera(facingMode)}>
+                  <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }} onClick={() => startCamera()}>
                     🔄 Thử lại Camera
                   </button>
                 </div>
               )}
             </div>
 
-            {/* Các tùy chọn điều khiển Camera */}
+            {/* Các nút điều khiển tiện ích */}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {hasMultipleCameras && (
                 <button
@@ -508,7 +520,6 @@ export default function ScannerModal({
                 </button>
               )}
 
-              {/* Nút chụp ảnh từ app Camera hệ thống hoặc Thư viện (Dự phòng tối thượng chống màn hình đen) */}
               <button
                 type="button"
                 className="btn btn-secondary"
