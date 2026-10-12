@@ -52,12 +52,17 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-    -- 1. Kiểm tra UID người gọi trong danh sách admin_users được cấp quyền
+    -- 1. Cho phép backend Service Role (SUPABASE_SERVICE_ROLE_KEY)
+    IF (auth.jwt() ->> 'role') = 'service_role' OR current_user = 'service_role' THEN
+        RETURN TRUE;
+    END IF;
+
+    -- 2. Kiểm tra UID người gọi trong danh sách admin_users được cấp quyền
     IF EXISTS (SELECT 1 FROM public.admin_users WHERE user_id = auth.uid()) THEN
         RETURN TRUE;
     END IF;
 
-    -- 2. Kiểm tra claim role 'admin' trong app_metadata của JWT (chỉ backend/service_role mới gán được)
+    -- 3. Kiểm tra claim role 'admin' trong app_metadata của JWT (chỉ backend/service_role mới gán được)
     IF (auth.jwt() -> 'app_metadata' ->> 'role') = 'admin' OR 
        (auth.jwt() -> 'app_metadata' ->> 'is_admin')::BOOLEAN IS TRUE THEN
         RETURN TRUE;
