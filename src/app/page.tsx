@@ -74,6 +74,19 @@ export default function HomePage() {
   const [replaceNewCode, setReplaceNewCode] = useState('');
   const [replaceReason, setReplaceReason] = useState('Đổi máy mới từ NCC');
 
+  // Quick Create Modals State
+  const [newProductModalOpen, setNewProductModalOpen] = useState(false);
+  const [newProductName, setNewProductName] = useState('');
+  const [newProductBrand, setNewProductBrand] = useState('');
+  const [newProductCategory, setNewProductCategory] = useState('Laptop');
+
+  const [newPartyModalOpen, setNewPartyModalOpen] = useState(false);
+  const [newPartyName, setNewPartyName] = useState('');
+  const [newPartyType, setNewPartyType] = useState<Party['type']>('SUPPLIER');
+  const [newPartyPhone, setNewPartyPhone] = useState('');
+  const [newPartyEmail, setNewPartyEmail] = useState('');
+
+
   // Initial Load
   const refreshData = async () => {
     setIsMock(inventoryService.isUsingMock());
@@ -410,6 +423,64 @@ export default function HomePage() {
     }
   };
 
+  const handleCreateProductSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProductName.trim() || !newProductBrand.trim()) {
+      showNotice('Vui lòng nhập tên và hãng sản xuất', 'error');
+      return;
+    }
+    setLoading(true);
+    try {
+      const created = await inventoryService.createProduct({
+        name: newProductName.trim(),
+        brand: newProductBrand.trim(),
+        category: newProductCategory.trim(),
+      });
+      showNotice(`Đã thêm dòng sản phẩm: ${created.name}`, 'success');
+      setNewProductModalOpen(false);
+      setNewProductName('');
+      setNewProductBrand('');
+      await refreshData();
+      setInboundProductId(created.id);
+    } catch (err: any) {
+      showNotice(err.message || 'Lỗi khi thêm sản phẩm', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreatePartySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPartyName.trim()) {
+      showNotice('Vui lòng nhập tên đối tác', 'error');
+      return;
+    }
+    setLoading(true);
+    try {
+      const created = await inventoryService.createParty({
+        name: newPartyName.trim(),
+        type: newPartyType,
+        phone: newPartyPhone.trim() || undefined,
+        email: newPartyEmail.trim() || undefined,
+      });
+      showNotice(`Đã thêm đối tác: ${created.name}`, 'success');
+      setNewPartyModalOpen(false);
+      setNewPartyName('');
+      setNewPartyPhone('');
+      setNewPartyEmail('');
+      await refreshData();
+      if (created.type === 'SUPPLIER') {
+        setInboundSupplierId(created.id);
+      } else {
+        setOutboundRecipientId(created.id);
+      }
+    } catch (err: any) {
+      showNotice(err.message || 'Lỗi khi thêm đối tác', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="app-container">
       {/* Header */}
@@ -575,7 +646,19 @@ export default function HomePage() {
               </div>
 
               <div className="form-group">
-                <label className="form-label">Nhà cung cấp (*):</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <label className="form-label" style={{ margin: 0 }}>Nhà cung cấp (*):</label>
+                  <button
+                    type="button"
+                    style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                    onClick={() => {
+                      setNewPartyType('SUPPLIER');
+                      setNewPartyModalOpen(true);
+                    }}
+                  >
+                    + Thêm NCC
+                  </button>
+                </div>
                 <select
                   className="select"
                   value={inboundSupplierId}
@@ -589,12 +672,22 @@ export default function HomePage() {
               </div>
 
               <div className="form-group">
-                <label className="form-label">Dòng sản phẩm đang quét (*):</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <label className="form-label" style={{ margin: 0 }}>Dòng sản phẩm đang quét (*):</label>
+                  <button
+                    type="button"
+                    style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                    onClick={() => setNewProductModalOpen(true)}
+                  >
+                    + Thêm Model
+                  </button>
+                </div>
                 <select
                   className="select"
                   value={inboundProductId}
                   onChange={(e) => setInboundProductId(e.target.value)}
                 >
+                  <option value="">-- Chọn dòng sản phẩm --</option>
                   {products.map((p) => (
                     <option key={p.id} value={p.id}>{p.brand} - {p.name}</option>
                   ))}
@@ -720,7 +813,19 @@ export default function HomePage() {
               </div>
 
               <div className="form-group">
-                <label className="form-label">Người nhận / Khách hàng (*):</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <label className="form-label" style={{ margin: 0 }}>Người nhận / Khách hàng (*):</label>
+                  <button
+                    type="button"
+                    style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                    onClick={() => {
+                      setNewPartyType('CUSTOMER_INDIVIDUAL');
+                      setNewPartyModalOpen(true);
+                    }}
+                  >
+                    + Thêm Người nhận
+                  </button>
+                </div>
                 <select
                   className="select"
                   value={outboundRecipientId}
@@ -1296,6 +1401,127 @@ export default function HomePage() {
                 Xác nhận đổi máy
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Add Product Modal */}
+      {newProductModalOpen && (
+        <div className="modal-overlay" onClick={() => setNewProductModalOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>+ Thêm dòng sản phẩm mới</h3>
+            <form onSubmit={handleCreateProductSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className="form-group">
+                <label className="form-label">Tên model / thiết bị (*):</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="VD: Latitude 5440 hoặc MacBook Pro M3"
+                  value={newProductName}
+                  onChange={(e) => setNewProductName(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Hãng sản xuất (*):</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="VD: Dell, Apple, Lenovo, HP, Asus..."
+                  value={newProductBrand}
+                  onChange={(e) => setNewProductBrand(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Danh mục thiết bị:</label>
+                <select
+                  className="select"
+                  value={newProductCategory}
+                  onChange={(e) => setNewProductCategory(e.target.value)}
+                >
+                  <option value="Laptop">Laptop / Máy tính xách tay</option>
+                  <option value="PC / Desktop">Máy tính để bàn / Mini PC</option>
+                  <option value="Monitor">Màn hình hiển thị</option>
+                  <option value="Accessories">Chuột, Bàn phím, Phụ kiện</option>
+                  <option value="Printer">Máy in / Scanner</option>
+                  <option value="Network">Thiết bị mạng / Router / Switch</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setNewProductModalOpen(false)}>
+                  Hủy
+                </button>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={loading}>
+                  {loading ? 'Đang lưu...' : 'Lưu sản phẩm'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Add Party Modal */}
+      {newPartyModalOpen && (
+        <div className="modal-overlay" onClick={() => setNewPartyModalOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>
+              {newPartyType === 'SUPPLIER' ? '+ Thêm Nhà Cung Cấp' : '+ Thêm Khách Hàng / Đối Tác'}
+            </h3>
+            <form onSubmit={handleCreatePartySubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div className="form-group">
+                <label className="form-label">Tên đối tác / Tổ chức (*):</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder={newPartyType === 'SUPPLIER' ? 'VD: FPT Synnex, DGW...' : 'VD: Nguyễn Văn A hoặc Công ty ABC...'}
+                  value={newPartyName}
+                  onChange={(e) => setNewPartyName(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Phân loại đối tác (*):</label>
+                <select
+                  className="select"
+                  value={newPartyType}
+                  onChange={(e) => setNewPartyType(e.target.value as any)}
+                >
+                  <option value="SUPPLIER">Nhà cung cấp (NCC)</option>
+                  <option value="CUSTOMER_INDIVIDUAL">Khách hàng cá nhân</option>
+                  <option value="CUSTOMER_ORG">Khách hàng doanh nghiệp / Tổ chức</option>
+                  <option value="INTERNAL_MEMBER">Nhân sự nội bộ công ty</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Số điện thoại:</label>
+                <input
+                  type="tel"
+                  className="input"
+                  placeholder="VD: 0912345678"
+                  value={newPartyPhone}
+                  onChange={(e) => setNewPartyPhone(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Email liên hệ:</label>
+                <input
+                  type="email"
+                  className="input"
+                  placeholder="VD: contact@doitac.com"
+                  value={newPartyEmail}
+                  onChange={(e) => setNewPartyEmail(e.target.value)}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setNewPartyModalOpen(false)}>
+                  Hủy
+                </button>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={loading}>
+                  {loading ? 'Đang lưu...' : 'Lưu đối tác'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -149,6 +149,57 @@ class InventoryService {
     );
   }
 
+  async createProduct(params: { name: string; brand: string; category?: string }): Promise<Product> {
+    if (isSupabaseConfigured()) {
+      const supabase = createClient();
+      const { data, error } = await supabase.from('products').insert({
+        name: params.name.trim(),
+        brand: params.brand.trim(),
+        category: params.category?.trim() || 'Thiết bị CNTT',
+      }).select('*').single();
+      if (error) throw error;
+      return data;
+    }
+    const newProd: Product = {
+      id: `prod-${Date.now()}`,
+      name: params.name.trim(),
+      brand: params.brand.trim(),
+      category: params.category?.trim() || 'Thiết bị CNTT',
+      created_at: new Date().toISOString(),
+    };
+    this.products.push(newProd);
+    this.persistMock();
+    return newProd;
+  }
+
+  async createParty(params: { name: string; type: Party['type']; phone?: string; email?: string; notes?: string }): Promise<Party> {
+    if (isSupabaseConfigured()) {
+      const supabase = createClient();
+      const { data, error } = await supabase.from('parties').insert({
+        name: params.name.trim(),
+        type: params.type,
+        phone: params.phone?.trim() || null,
+        email: params.email?.trim() || null,
+        notes: params.notes?.trim() || null,
+      }).select('*').single();
+      if (error) throw error;
+      return data;
+    }
+    const newParty: Party = {
+      id: `party-${Date.now()}`,
+      name: params.name.trim(),
+      type: params.type,
+      phone: params.phone?.trim() || undefined,
+      email: params.email?.trim() || undefined,
+      notes: params.notes?.trim() || undefined,
+      created_at: new Date().toISOString(),
+    };
+    this.parties.push(newParty);
+    this.persistMock();
+    return newParty;
+  }
+
+
   // --- BUSINESS RULES & READINESS ---
   checkOutboundReadiness(device: Device): { eligible: boolean; reason?: string } {
     if (device.owner_type !== 'INTERNAL') {
