@@ -517,7 +517,12 @@ export default function HomePage() {
       await refreshData();
       setInboundProductId(created.id);
     } catch (err: any) {
-      showNotice(err.message || 'Lỗi khi thêm sản phẩm', 'error');
+      const msg = err.message || '';
+      if (msg.includes('row-level security') || msg.includes('42501')) {
+        showNotice('Bạn chưa đăng nhập quản trị viên! Vui lòng tải lại trang và đăng nhập để thêm dữ liệu.', 'error');
+      } else {
+        showNotice(msg || 'Lỗi khi thêm sản phẩm', 'error');
+      }
     } finally {
       setLoading(false);
     }
@@ -549,7 +554,12 @@ export default function HomePage() {
         setOutboundRecipientId(created.id);
       }
     } catch (err: any) {
-      showNotice(err.message || 'Lỗi khi thêm đối tác', 'error');
+      const msg = err.message || '';
+      if (msg.includes('row-level security') || msg.includes('42501')) {
+        showNotice('Bạn chưa đăng nhập quản trị viên! Vui lòng tải lại trang và đăng nhập để thêm dữ liệu.', 'error');
+      } else {
+        showNotice(msg || 'Lỗi khi thêm đối tác', 'error');
+      }
     } finally {
       setLoading(false);
     }
