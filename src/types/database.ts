@@ -134,8 +134,8 @@ export interface WarrantyCase {
   customer_id: string;
   customer?: Party;
   case_status: WarrantyCaseStatus;
-  snapshot_supplier_policy?: any;
-  snapshot_customer_policy?: any;
+  snapshot_supplier_policy?: Record<string, unknown> | WarrantyPolicy | null;
+  snapshot_customer_policy?: Record<string, unknown> | WarrantyPolicy | null;
   reported_fault: string;
   accessories_received?: string | null;
   repair_outcome?: string | null;
@@ -151,7 +151,7 @@ export interface EvidencePhoto {
   entity_id: string;
   device_id?: string | null;
   storage_key: string;
-  watermark_meta?: any;
+  watermark_meta?: Record<string, unknown> | null;
   performer?: string;
   created_at: string;
 }
