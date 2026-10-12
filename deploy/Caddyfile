@@ -1,0 +1,24 @@
+# Caddyfile for phathocit.id.vn
+# Tự động cấp phát và gia hạn chứng chỉ Let's Encrypt SSL/HTTPS
+
+phathocit.id.vn {
+    # Chuyển tiếp tới container Next.js chạy trên cổng 3000
+    reverse_proxy 127.0.0.1:3000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Giới hạn kích thước upload ảnh (ví dụ tối đa 15MB)
+    request_body {
+        max_size 15MB
+    }
+
+    # Bật nén phản hồi gzip/zstd
+    encode zstd gzip
+
+    # Log truy cập
+    log {
+        output file /var/log/caddy/phathocit_access.log
+    }
+}
