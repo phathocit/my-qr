@@ -115,13 +115,24 @@ export default function HomePage() {
 
   // Inbound Warranty Policy State
   const [inboundHasWarranty, setInboundHasWarranty] = useState(true);
-  const [inboundWarrantyMonths, setInboundWarrantyMonths] = useState<number>(12);
+  const [inboundWarrantyDuration, setInboundWarrantyDuration] = useState<number>(12);
+  const [inboundWarrantyUnit, setInboundWarrantyUnit] = useState<'days' | 'months' | 'years'>('months');
+  const [inboundWarrantyEndDate, setInboundWarrantyEndDate] = useState<string>('');
   const [inboundWarrantyNotes, setInboundWarrantyNotes] = useState('Chính hãng NCC');
 
   // Outbound Warranty Policy State
   const [outboundHasWarranty, setOutboundHasWarranty] = useState(true);
-  const [outboundWarrantyMonths, setOutboundWarrantyMonths] = useState<number>(12);
+  const [outboundWarrantyDuration, setOutboundWarrantyDuration] = useState<number>(12);
+  const [outboundWarrantyUnit, setOutboundWarrantyUnit] = useState<'days' | 'months' | 'years'>('months');
+  const [outboundWarrantyEndDate, setOutboundWarrantyEndDate] = useState<string>('');
   const [outboundWarrantyNotes, setOutboundWarrantyNotes] = useState('Bảo hành tiêu chuẩn công ty');
+  const [todayStr, setTodayStr] = useState<string>('');
+
+  // Modal custom duration states
+  const [modalSupCustomAmount, setModalSupCustomAmount] = useState<number>(6);
+  const [modalSupCustomUnit, setModalSupCustomUnit] = useState<'days' | 'months' | 'years'>('months');
+  const [modalCustCustomAmount, setModalCustCustomAmount] = useState<number>(6);
+  const [modalCustCustomUnit, setModalCustCustomUnit] = useState<'days' | 'months' | 'years'>('months');
 
   // Google Sheets Sync & Observability State
   const [sheetsModalOpen, setSheetsModalOpen] = useState(false);
@@ -197,6 +208,14 @@ export default function HomePage() {
   };
 
   useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    setTodayStr(today);
+    const nextYear = new Date();
+    nextYear.setFullYear(nextYear.getFullYear() + 1);
+    const nextYearStr = nextYear.toISOString().slice(0, 10);
+    setInboundWarrantyEndDate(nextYearStr);
+    setOutboundWarrantyEndDate(nextYearStr);
+
     const initAuth = async () => {
       if (isSupabaseConfigured()) {
         try {
@@ -422,10 +441,64 @@ export default function HomePage() {
   };
 
   // --- WARRANTY POLICY HELPERS & HANDLERS ---
-  const addMonthsToDate = (baseDateStr: string, months: number): string => {
+  const addDurationToDate = (
+    baseDateStr: string,
+    amount: number,
+    unit: 'days' | 'months' | 'years'
+  ): string => {
     const d = baseDateStr ? new Date(baseDateStr) : new Date();
-    d.setMonth(d.getMonth() + months);
+    if (isNaN(d.getTime())) return '';
+    if (unit === 'days') {
+      d.setDate(d.getDate() + amount);
+    } else if (unit === 'months') {
+      d.setMonth(d.getMonth() + amount);
+    } else if (unit === 'years') {
+      d.setFullYear(d.getFullYear() + amount);
+    }
     return d.toISOString().slice(0, 10);
+  };
+
+  const addMonthsToDate = (baseDateStr: string, months: number): string => {
+    return addDurationToDate(baseDateStr, months, 'months');
+  };
+
+  const calculateDurationBetween = (startDateStr?: string | null, endDateStr?: string | null): string => {
+    if (!endDateStr) return 'Không thời hạn (Vô hạn)';
+    if (!startDateStr) return `Đến ngày ${endDateStr}`;
+    const start = new Date(startDateStr);
+    const end = new Date(endDateStr);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return `Đến ngày ${endDateStr}`;
+
+    const diffMs = end.getTime() - start.getTime();
+    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) return 'Đã hết hạn';
+    if (diffDays === 0) return 'Trong ngày';
+    if (diffDays < 30) return `${diffDays} ngày`;
+    const months = Math.round(diffDays / 30.4375);
+    if (months < 12) return `${months} tháng (~${diffDays} ngày)`;
+    const years = (diffDays / 365.25).toFixed(1).replace(/\.0$/, '');
+    return `${years} năm (~${months} tháng)`;
+  };
+
+  const getWarrantyRemainingText = (endDateStr?: string | null, referenceDateStr?: string | null): { text: string; isExpired: boolean } => {
+    if (!endDateStr) return { text: 'Không thời hạn', isExpired: false };
+    if (!referenceDateStr) {
+      return { text: `Đến ${endDateStr}`, isExpired: false };
+    }
+    const today = new Date(referenceDateStr);
+    if (isNaN(today.getTime())) return { text: `Đến ${endDateStr}`, isExpired: false };
+    today.setHours(0, 0, 0, 0);
+    const end = new Date(endDateStr);
+    if (isNaN(end.getTime())) return { text: `Đến ${endDateStr}`, isExpired: false };
+    end.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) return { text: `Hết hạn ${Math.abs(diffDays)} ngày trước`, isExpired: true };
+    if (diffDays === 0) return { text: 'Hôm nay hết hạn', isExpired: false };
+    if (diffDays < 30) return { text: `Còn ${diffDays} ngày`, isExpired: false };
+    const months = Math.round(diffDays / 30.4375);
+    if (months < 12) return { text: `Còn ~${months} tháng`, isExpired: false };
+    const years = (diffDays / 365.25).toFixed(1).replace(/\.0$/, '');
+    return { text: `Còn ~${years} năm`, isExpired: false };
   };
 
   const openEditWarrantyModal = (dev: Device) => {
@@ -523,7 +596,7 @@ export default function HomePage() {
         ? {
             has_warranty: true,
             start_date: todayStr,
-            end_date: inboundWarrantyMonths > 0 ? addMonthsToDate(todayStr, inboundWarrantyMonths) : undefined,
+            end_date: inboundWarrantyEndDate ? inboundWarrantyEndDate : undefined,
             terms_note: inboundWarrantyNotes || undefined,
           }
         : undefined;
@@ -580,7 +653,7 @@ export default function HomePage() {
             ? {
                 has_warranty: true,
                 start_date: todayStr,
-                end_date: outboundWarrantyMonths > 0 ? addMonthsToDate(todayStr, outboundWarrantyMonths) : undefined,
+                end_date: outboundWarrantyEndDate ? outboundWarrantyEndDate : undefined,
                 terms_note: outboundWarrantyNotes || undefined,
               }
             : undefined;
@@ -1183,7 +1256,26 @@ export default function HomePage() {
                     🏭 <strong>BH Nhà cung cấp:</strong>{' '}
                     {selectedDevice.supplier_warranty?.has_warranty ? (
                       <span style={{ color: 'var(--success)', fontWeight: 500 }}>
-                        Đến {selectedDevice.supplier_warranty.end_date || 'Không thời hạn'} {selectedDevice.supplier_warranty.terms_note ? `(${selectedDevice.supplier_warranty.terms_note})` : ''}
+                        Đến {selectedDevice.supplier_warranty.end_date || 'Không thời hạn'}
+                        {(() => {
+                          const status = getWarrantyRemainingText(selectedDevice.supplier_warranty.end_date, todayStr);
+                          return (
+                            <span
+                              style={{
+                                marginLeft: 6,
+                                padding: '1px 6px',
+                                borderRadius: 4,
+                                fontSize: '0.72rem',
+                                background: status.isExpired ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                                color: status.isExpired ? 'var(--danger)' : 'var(--success)',
+                                fontWeight: 600,
+                              }}
+                            >
+                              {status.text}
+                            </span>
+                          );
+                        })()}
+                        {selectedDevice.supplier_warranty.terms_note ? ` (${selectedDevice.supplier_warranty.terms_note})` : ''}
                       </span>
                     ) : (
                       <span style={{ color: 'var(--text-muted)' }}>Chưa có thông tin</span>
@@ -1193,7 +1285,26 @@ export default function HomePage() {
                     🤝 <strong>BH Khách hàng:</strong>{' '}
                     {selectedDevice.customer_warranty?.has_warranty ? (
                       <span style={{ color: 'var(--success)', fontWeight: 500 }}>
-                        Đến {selectedDevice.customer_warranty.end_date || 'Không thời hạn'} {selectedDevice.customer_warranty.terms_note ? `(${selectedDevice.customer_warranty.terms_note})` : ''}
+                        Đến {selectedDevice.customer_warranty.end_date || 'Không thời hạn'}
+                        {(() => {
+                          const status = getWarrantyRemainingText(selectedDevice.customer_warranty.end_date, todayStr);
+                          return (
+                            <span
+                              style={{
+                                marginLeft: 6,
+                                padding: '1px 6px',
+                                borderRadius: 4,
+                                fontSize: '0.72rem',
+                                background: status.isExpired ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                                color: status.isExpired ? 'var(--danger)' : 'var(--success)',
+                                fontWeight: 600,
+                              }}
+                            >
+                              {status.text}
+                            </span>
+                          );
+                        })()}
+                        {selectedDevice.customer_warranty.terms_note ? ` (${selectedDevice.customer_warranty.terms_note})` : ''}
                       </span>
                     ) : (
                       <span style={{ color: 'var(--text-muted)' }}>Chưa có thông tin</span>
@@ -1390,7 +1501,7 @@ export default function HomePage() {
 
               {/* Chính sách bảo hành NCC cho phiếu nhập */}
               <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
                   <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, margin: 0, cursor: 'pointer' }}>
                     <input
                       type="checkbox"
@@ -1401,38 +1512,111 @@ export default function HomePage() {
                     <span>🏭 Có bảo hành từ Nhà cung cấp</span>
                   </label>
                   {inboundHasWarranty && (
-                    <span style={{ fontSize: '0.75rem', color: 'var(--success)', fontWeight: 600 }}>Tự động áp dụng cho lô nhập</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--success)', fontWeight: 600 }}>
+                      {inboundWarrantyEndDate
+                        ? `⏱️ ${calculateDurationBetween(todayStr, inboundWarrantyEndDate)}`
+                        : '⏱️ Không thời hạn'}
+                    </span>
                   )}
                 </div>
 
                 {inboundHasWarranty && (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    <div>
-                      <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Thời hạn BH (tháng):</label>
-                      <select
-                        className="select"
-                        value={inboundWarrantyMonths}
-                        onChange={(e) => setInboundWarrantyMonths(Number(e.target.value))}
-                        style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {/* Quick Presets */}
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 500 }}>Gợi ý nhanh:</span>
+                      {[
+                        { label: '7 ngày test', amount: 7, unit: 'days' as const },
+                        { label: '30 ngày', amount: 30, unit: 'days' as const },
+                        { label: '3 tháng', amount: 3, unit: 'months' as const },
+                        { label: '6 tháng', amount: 6, unit: 'months' as const },
+                        { label: '12 tháng (1N)', amount: 12, unit: 'months' as const },
+                        { label: '24 tháng (2N)', amount: 24, unit: 'months' as const },
+                        { label: '36 tháng (3N)', amount: 36, unit: 'months' as const },
+                      ].map((preset) => (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '2px 8px', fontSize: '0.72rem' }}
+                          onClick={() => {
+                            setInboundWarrantyDuration(preset.amount);
+                            setInboundWarrantyUnit(preset.unit);
+                            setInboundWarrantyEndDate(addDurationToDate(new Date().toISOString().slice(0, 10), preset.amount, preset.unit));
+                          }}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '2px 8px', fontSize: '0.72rem' }}
+                        onClick={() => {
+                          setInboundWarrantyEndDate('');
+                        }}
                       >
-                        <option value={0}>Không thời hạn</option>
-                        <option value={3}>3 tháng</option>
-                        <option value={6}>6 tháng</option>
-                        <option value={12}>12 tháng (1 năm)</option>
-                        <option value={24}>24 tháng (2 năm)</option>
-                        <option value={36}>36 tháng (3 năm)</option>
-                      </select>
+                        Không hạn
+                      </button>
                     </div>
-                    <div>
-                      <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ghi chú / Điều khoản NCC:</label>
-                      <input
-                        type="text"
-                        className="input"
-                        value={inboundWarrantyNotes}
-                        onChange={(e) => setInboundWarrantyNotes(e.target.value)}
-                        placeholder="VD: Chính hãng NCC"
-                        style={{ padding: '6px 8px', fontSize: '0.85rem' }}
-                      />
+
+                    {/* Inputs: Duration + Unit OR exact Date */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Tuỳ chỉnh thời lượng:</label>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <input
+                            type="number"
+                            min={1}
+                            className="input"
+                            value={inboundWarrantyDuration}
+                            onChange={(e) => {
+                              const val = Math.max(1, Number(e.target.value) || 1);
+                              setInboundWarrantyDuration(val);
+                              setInboundWarrantyEndDate(addDurationToDate(new Date().toISOString().slice(0, 10), val, inboundWarrantyUnit));
+                            }}
+                            style={{ padding: '6px 8px', fontSize: '0.85rem', width: 70 }}
+                          />
+                          <select
+                            className="select"
+                            value={inboundWarrantyUnit}
+                            onChange={(e) => {
+                              const u = e.target.value as 'days' | 'months' | 'years';
+                              setInboundWarrantyUnit(u);
+                              setInboundWarrantyEndDate(addDurationToDate(new Date().toISOString().slice(0, 10), inboundWarrantyDuration, u));
+                            }}
+                            style={{ padding: '6px 8px', fontSize: '0.85rem', flex: 1 }}
+                          >
+                            <option value="days">Ngày</option>
+                            <option value="months">Tháng</option>
+                            <option value="years">Năm</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ngày kết thúc BH:</label>
+                        <input
+                          type="date"
+                          className="input"
+                          value={inboundWarrantyEndDate}
+                          onChange={(e) => setInboundWarrantyEndDate(e.target.value)}
+                          placeholder="Không giới hạn"
+                          style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ghi chú / Điều khoản NCC:</label>
+                        <input
+                          type="text"
+                          className="input"
+                          value={inboundWarrantyNotes}
+                          onChange={(e) => setInboundWarrantyNotes(e.target.value)}
+                          placeholder="VD: Chính hãng NCC"
+                          style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                        />
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1673,7 +1857,7 @@ export default function HomePage() {
               {/* Chính sách bảo hành Khách hàng khi xuất bán / cấp */}
               {['SALE_INDIVIDUAL', 'SALE_ORG', 'GIVE_PERMANENT'].includes(outboundType) && (
                 <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
                     <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, margin: 0, cursor: 'pointer' }}>
                       <input
                         type="checkbox"
@@ -1684,39 +1868,110 @@ export default function HomePage() {
                       <span>🤝 Cam kết bảo hành cho khách hàng</span>
                     </label>
                     {outboundHasWarranty && (
-                      <span style={{ fontSize: '0.75rem', color: 'var(--success)', fontWeight: 600 }}>Tự động kích hoạt khi xuất</span>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--success)', fontWeight: 600 }}>
+                        {outboundWarrantyEndDate
+                          ? `⏱️ ${calculateDurationBetween(todayStr, outboundWarrantyEndDate)}`
+                          : '⏱️ Không thời hạn'}
+                      </span>
                     )}
                   </div>
 
                   {outboundHasWarranty && (
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                      <div>
-                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Thời hạn BH (tháng):</label>
-                        <select
-                          className="select"
-                          value={outboundWarrantyMonths}
-                          onChange={(e) => setOutboundWarrantyMonths(Number(e.target.value))}
-                          style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {/* Quick Presets */}
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 500 }}>Gợi ý nhanh:</span>
+                        {[
+                          { label: '7 ngày test', amount: 7, unit: 'days' as const },
+                          { label: '30 ngày', amount: 30, unit: 'days' as const },
+                          { label: '3 tháng', amount: 3, unit: 'months' as const },
+                          { label: '6 tháng', amount: 6, unit: 'months' as const },
+                          { label: '12 tháng (1N)', amount: 12, unit: 'months' as const },
+                          { label: '24 tháng (2N)', amount: 24, unit: 'months' as const },
+                        ].map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ padding: '2px 8px', fontSize: '0.72rem' }}
+                            onClick={() => {
+                              setOutboundWarrantyDuration(preset.amount);
+                              setOutboundWarrantyUnit(preset.unit);
+                              setOutboundWarrantyEndDate(addDurationToDate(new Date().toISOString().slice(0, 10), preset.amount, preset.unit));
+                            }}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '2px 8px', fontSize: '0.72rem' }}
+                          onClick={() => {
+                            setOutboundWarrantyEndDate('');
+                          }}
                         >
-                          <option value={0}>Không thời hạn</option>
-                          <option value={1}>1 tháng</option>
-                          <option value={3}>3 tháng</option>
-                          <option value={6}>6 tháng</option>
-                          <option value={12}>12 tháng (1 năm)</option>
-                          <option value={24}>24 tháng (2 năm)</option>
-                          <option value={36}>36 tháng (3 năm)</option>
-                        </select>
+                          Không hạn
+                        </button>
                       </div>
-                      <div>
-                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ghi chú / Tiêu chuẩn BH:</label>
-                        <input
-                          type="text"
-                          className="input"
-                          value={outboundWarrantyNotes}
-                          onChange={(e) => setOutboundWarrantyNotes(e.target.value)}
-                          placeholder="VD: Bảo hành 1 đổi 1 trong 30 ngày"
-                          style={{ padding: '6px 8px', fontSize: '0.85rem' }}
-                        />
+
+                      {/* Inputs: Duration + Unit OR exact Date */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+                        <div>
+                          <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Tuỳ chỉnh thời lượng:</label>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <input
+                              type="number"
+                              min={1}
+                              className="input"
+                              value={outboundWarrantyDuration}
+                              onChange={(e) => {
+                                const val = Math.max(1, Number(e.target.value) || 1);
+                                setOutboundWarrantyDuration(val);
+                                setOutboundWarrantyEndDate(addDurationToDate(new Date().toISOString().slice(0, 10), val, outboundWarrantyUnit));
+                              }}
+                              style={{ padding: '6px 8px', fontSize: '0.85rem', width: 70 }}
+                            />
+                            <select
+                              className="select"
+                              value={outboundWarrantyUnit}
+                              onChange={(e) => {
+                                const u = e.target.value as 'days' | 'months' | 'years';
+                                setOutboundWarrantyUnit(u);
+                                setOutboundWarrantyEndDate(addDurationToDate(new Date().toISOString().slice(0, 10), outboundWarrantyDuration, u));
+                              }}
+                              style={{ padding: '6px 8px', fontSize: '0.85rem', flex: 1 }}
+                            >
+                              <option value="days">Ngày</option>
+                              <option value="months">Tháng</option>
+                              <option value="years">Năm</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ngày kết thúc BH:</label>
+                          <input
+                            type="date"
+                            className="input"
+                            value={outboundWarrantyEndDate}
+                            onChange={(e) => setOutboundWarrantyEndDate(e.target.value)}
+                            placeholder="Không giới hạn"
+                            style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ghi chú / Tiêu chuẩn BH:</label>
+                          <input
+                            type="text"
+                            className="input"
+                            value={outboundWarrantyNotes}
+                            onChange={(e) => setOutboundWarrantyNotes(e.target.value)}
+                            placeholder="VD: 1 đổi 1 trong 30 ngày"
+                            style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                          />
+                        </div>
                       </div>
                     </div>
                   )}
@@ -2808,7 +3063,12 @@ export default function HomePage() {
                         />
                       </div>
                       <div className="form-group" style={{ margin: 0 }}>
-                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ngày kết thúc:</label>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                          <label className="form-label" style={{ fontSize: '0.75rem', margin: 0 }}>Ngày kết thúc:</label>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--primary)', fontWeight: 600 }}>
+                            {calculateDurationBetween(editSupplierStartDate, editSupplierEndDate)}
+                          </span>
+                        </div>
                         <input
                           type="date"
                           className="input"
@@ -2819,39 +3079,69 @@ export default function HomePage() {
                       </div>
                     </div>
 
+                    {/* Quick Presets */}
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Gợi ý hạn:</span>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Gợi ý nhanh:</span>
+                      {[
+                        { label: '+7 ngày (Test)', amount: 7, unit: 'days' as const },
+                        { label: '+30 ngày', amount: 30, unit: 'days' as const },
+                        { label: '+3 tháng', amount: 3, unit: 'months' as const },
+                        { label: '+6 tháng', amount: 6, unit: 'months' as const },
+                        { label: '+12 tháng (1N)', amount: 12, unit: 'months' as const },
+                        { label: '+24 tháng (2N)', amount: 24, unit: 'months' as const },
+                        { label: '+36 tháng (3N)', amount: 36, unit: 'months' as const },
+                        { label: '+5 năm', amount: 5, unit: 'years' as const },
+                      ].map((p) => (
+                        <button
+                          key={p.label}
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '2px 8px', fontSize: '0.72rem' }}
+                          onClick={() => setEditSupplierEndDate(addDurationToDate(editSupplierStartDate || new Date().toISOString().slice(0, 10), p.amount, p.unit))}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
                       <button
                         type="button"
                         className="btn btn-secondary"
-                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
-                        onClick={() => setEditSupplierEndDate(addMonthsToDate(editSupplierStartDate, 12))}
-                      >
-                        +12 tháng
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
-                        onClick={() => setEditSupplierEndDate(addMonthsToDate(editSupplierStartDate, 24))}
-                      >
-                        +24 tháng
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
-                        onClick={() => setEditSupplierEndDate(addMonthsToDate(editSupplierStartDate, 36))}
-                      >
-                        +36 tháng
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                        style={{ padding: '2px 8px', fontSize: '0.72rem' }}
                         onClick={() => setEditSupplierEndDate('')}
                       >
                         Không hạn
+                      </button>
+                    </div>
+
+                    {/* Custom duration adder */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(0,0,0,0.04)', padding: '6px 10px', borderRadius: 'var(--radius-sm)' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Tuỳ chỉnh thêm:</span>
+                      <input
+                        type="number"
+                        min={1}
+                        className="input"
+                        value={modalSupCustomAmount}
+                        onChange={(e) => setModalSupCustomAmount(Math.max(1, Number(e.target.value) || 1))}
+                        style={{ width: 65, padding: '4px 6px', fontSize: '0.8rem' }}
+                      />
+                      <select
+                        className="select"
+                        value={modalSupCustomUnit}
+                        onChange={(e) => setModalSupCustomUnit(e.target.value as any)}
+                        style={{ width: 85, padding: '4px 6px', fontSize: '0.8rem' }}
+                      >
+                        <option value="days">Ngày</option>
+                        <option value="months">Tháng</option>
+                        <option value="years">Năm</option>
+                      </select>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                        onClick={() => {
+                          setEditSupplierEndDate(addDurationToDate(editSupplierStartDate || new Date().toISOString().slice(0, 10), modalSupCustomAmount, modalSupCustomUnit));
+                        }}
+                      >
+                        Áp dụng
                       </button>
                     </div>
 
@@ -2911,7 +3201,12 @@ export default function HomePage() {
                         />
                       </div>
                       <div className="form-group" style={{ margin: 0 }}>
-                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ngày kết thúc:</label>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                          <label className="form-label" style={{ fontSize: '0.75rem', margin: 0 }}>Ngày kết thúc:</label>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--primary)', fontWeight: 600 }}>
+                            {calculateDurationBetween(editCustomerStartDate, editCustomerEndDate)}
+                          </span>
+                        </div>
                         <input
                           type="date"
                           className="input"
@@ -2922,39 +3217,69 @@ export default function HomePage() {
                       </div>
                     </div>
 
+                    {/* Quick Presets */}
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Gợi ý hạn:</span>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Gợi ý nhanh:</span>
+                      {[
+                        { label: '+7 ngày (Test)', amount: 7, unit: 'days' as const },
+                        { label: '+30 ngày', amount: 30, unit: 'days' as const },
+                        { label: '+3 tháng', amount: 3, unit: 'months' as const },
+                        { label: '+6 tháng', amount: 6, unit: 'months' as const },
+                        { label: '+12 tháng (1N)', amount: 12, unit: 'months' as const },
+                        { label: '+24 tháng (2N)', amount: 24, unit: 'months' as const },
+                        { label: '+36 tháng (3N)', amount: 36, unit: 'months' as const },
+                        { label: '+5 năm', amount: 5, unit: 'years' as const },
+                      ].map((p) => (
+                        <button
+                          key={p.label}
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '2px 8px', fontSize: '0.72rem' }}
+                          onClick={() => setEditCustomerEndDate(addDurationToDate(editCustomerStartDate || new Date().toISOString().slice(0, 10), p.amount, p.unit))}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
                       <button
                         type="button"
                         className="btn btn-secondary"
-                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
-                        onClick={() => setEditCustomerEndDate(addMonthsToDate(editCustomerStartDate, 6))}
-                      >
-                        +6 tháng
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
-                        onClick={() => setEditCustomerEndDate(addMonthsToDate(editCustomerStartDate, 12))}
-                      >
-                        +12 tháng
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
-                        onClick={() => setEditCustomerEndDate(addMonthsToDate(editCustomerStartDate, 24))}
-                      >
-                        +24 tháng
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                        style={{ padding: '2px 8px', fontSize: '0.72rem' }}
                         onClick={() => setEditCustomerEndDate('')}
                       >
                         Không hạn
+                      </button>
+                    </div>
+
+                    {/* Custom duration adder */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(0,0,0,0.04)', padding: '6px 10px', borderRadius: 'var(--radius-sm)' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Tuỳ chỉnh thêm:</span>
+                      <input
+                        type="number"
+                        min={1}
+                        className="input"
+                        value={modalCustCustomAmount}
+                        onChange={(e) => setModalCustCustomAmount(Math.max(1, Number(e.target.value) || 1))}
+                        style={{ width: 65, padding: '4px 6px', fontSize: '0.8rem' }}
+                      />
+                      <select
+                        className="select"
+                        value={modalCustCustomUnit}
+                        onChange={(e) => setModalCustCustomUnit(e.target.value as any)}
+                        style={{ width: 85, padding: '4px 6px', fontSize: '0.8rem' }}
+                      >
+                        <option value="days">Ngày</option>
+                        <option value="months">Tháng</option>
+                        <option value="years">Năm</option>
+                      </select>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                        onClick={() => {
+                          setEditCustomerEndDate(addDurationToDate(editCustomerStartDate || new Date().toISOString().slice(0, 10), modalCustCustomAmount, modalCustCustomUnit));
+                        }}
+                      >
+                        Áp dụng
                       </button>
                     </div>
 
