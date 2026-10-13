@@ -28,40 +28,42 @@ export default function ScannerModal({
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
   const [currentDeviceIndex, setCurrentDeviceIndex] = useState<number>(0);
+  const [activeResolution, setActiveResolution] = useState<string>('');
   const [inAppNotice, setInAppNotice] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const loadingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const safetyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const zxingReaderRef = useRef<any>(null);
   const isHandlingDetectionRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const facingModeRef = useRef<'environment' | 'user'>('environment');
-  // Guard: tránh gọi play() nhiều lần đồng thời
-  const isPlayingRef = useRef(false);
-  // Guard: tránh startScanningLoop chạy 2 lần
   const scanLoopStartedRef = useRef(false);
 
   facingModeRef.current = facingMode;
 
   // ─── Dừng toàn bộ camera stream & scanner loop ───────────────────────────
   const stopCamera = useCallback(() => {
-    if (loadingTimerRef.current) {
-      clearTimeout(loadingTimerRef.current);
-      loadingTimerRef.current = null;
+    if (safetyTimeoutRef.current) {
+      clearTimeout(safetyTimeoutRef.current);
+      safetyTimeoutRef.current = null;
     }
     if (scanIntervalRef.current) {
       clearInterval(scanIntervalRef.current);
       scanIntervalRef.current = null;
     }
     if (zxingReaderRef.current) {
-      try { zxingReaderRef.current.reset(); } catch {}
+      try {
+        zxingReaderRef.current.reset();
+      } catch {}
       zxingReaderRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => {
-        try { track.stop(); } catch {}
+        try {
+          track.stop();
+        } catch {}
       });
       streamRef.current = null;
     }
@@ -71,14 +73,14 @@ export default function ScannerModal({
         videoRef.current.srcObject = null;
       } catch {}
     }
-    isPlayingRef.current = false;
     scanLoopStartedRef.current = false;
     setCameraActive(false);
     setIsLoadingCamera(false);
     setNeedsTapToPlay(false);
+    setActiveResolution('');
   }, []);
 
-  // ─── Chụp khung hình đối chiếu ───────────────────────────────────────────
+  // ─── Chụp khung hình đối chiếu khi phát hiện mã ─────────────────────────
   const captureFrame = useCallback((): string | null => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0 || video.videoHeight === 0) return null;
@@ -107,9 +109,8 @@ export default function ScannerModal({
     if (photo) setCapturedPhoto(photo);
   }, [captureFrame, stopCamera]);
 
-  // ─── Khởi động vòng quét (chỉ chạy 1 lần) ───────────────────────────────
+  // ─── Khởi động vòng quét barcode/QR ─────────────────────────────────────
   const startScanningLoop = useCallback(async () => {
-    // Chặn double-start
     if (scanLoopStartedRef.current) return;
     scanLoopStartedRef.current = true;
 
@@ -130,118 +131,91 @@ export default function ScannerModal({
           } catch {}
         }
         const barcodeDetector = new BarcodeDetectorClass({ formats: supportedFormats });
-        setEngineUsed('BarcodeDetector (Native)');
+        setEngineUsed('BarcodeDetector (Chuẩn gốc)');
+
         scanIntervalRef.current = setInterval(async () => {
           const v = videoRef.current;
           if (!v || v.readyState < 2 || v.paused || isHandlingDetectionRef.current) return;
           try {
             const barcodes = await barcodeDetector.detect(v);
-            if (barcodes.length > 0 && barcodes[0].rawValue) onCodeFound(barcodes[0].rawValue);
+            if (barcodes.length > 0 && barcodes[0]?.rawValue) {
+              onCodeFound(barcodes[0].rawValue);
+            }
           } catch {}
-        }, 300);
+        }, 250);
         return;
       } catch (e) {
         console.warn('BarcodeDetector init failed, using ZXing:', e);
       }
     }
 
+    // ZXing fallback cho iOS Safari và trình duyệt không có BarcodeDetector
     try {
-      setEngineUsed('ZXing (Client)');
+      setEngineUsed('ZXing Library');
       const { BrowserMultiFormatReader } = await import('@zxing/library');
       const reader = new BrowserMultiFormatReader();
       zxingReaderRef.current = reader;
-      scanIntervalRef.current = setInterval(async () => {
-        const v = videoRef.current;
-        if (!v || v.readyState < 2 || v.paused || isHandlingDetectionRef.current) return;
-        try {
-          const result = await reader.decodeFromVideoElement(v);
-          if (result?.getText()) onCodeFound(result.getText());
-        } catch {}
-      }, 350);
+
+      const v = videoRef.current;
+      if (!v) return;
+
+      // decodeFromVideoElementContinuously là hàm chuẩn của ZXing cho continuous scan
+      // Tuyệt đối không gọi reader.decodeFromVideoElement trong setInterval vì nó tự gọi reset() mỗi frame!
+      reader.decodeFromVideoElementContinuously(v, (result: any) => {
+        if (result && result.getText && !isHandlingDetectionRef.current) {
+          const text = result.getText();
+          if (text) onCodeFound(text);
+        }
+      });
     } catch (err) {
       console.warn('ZXing load failed:', err);
     }
   }, [onCodeFound]);
 
-  // ─── Hàm kích hoạt video an toàn (chống double-call) ────────────────────
-  const activateVideo = useCallback((videoEl: HTMLVideoElement) => {
-    // Đã đang kích hoạt hoặc đã active → bỏ qua
-    if (isPlayingRef.current) return;
-    isPlayingRef.current = true;
-
-    const doPlay = () => {
-      if (!videoEl.srcObject) {
-        isPlayingRef.current = false;
-        return;
-      }
-      const playPromise = videoEl.play();
-      if (playPromise !== undefined) {
-        playPromise
-          .then(() => {
-            // Thành công — state sẽ được cập nhật qua sự kiện onPlaying
-          })
-          .catch((err: any) => {
-            isPlayingRef.current = false;
-            if (err?.name === 'AbortError') {
-              // iOS Safari: stream chưa sẵn sàng, thử lại sau 200ms
-              setTimeout(() => {
-                isPlayingRef.current = false;
-                activateVideo(videoEl);
-              }, 200);
-            } else if (err?.name === 'NotAllowedError') {
-              setNeedsTapToPlay(true);
-              setIsLoadingCamera(false);
-            } else {
-              console.warn('play() failed:', err?.name, err?.message);
-              setNeedsTapToPlay(true);
-              setIsLoadingCamera(false);
-            }
-          });
-      }
-    };
-
-    // Nếu chưa có metadata, đợi loadedmetadata rồi mới play
-    if (videoEl.readyState >= 1) {
-      doPlay();
-    } else {
-      videoEl.addEventListener('loadedmetadata', doPlay, { once: true });
-    }
-  }, []);
-
-  // ─── Khởi động camera ─────────────────────────────────────────────────────
+  // ─── Khởi động camera trực tiếp ──────────────────────────────────────────
   const startCamera = useCallback(async (targetFacing?: 'environment' | 'user', specificDeviceId?: string) => {
     const desiredFacing = targetFacing || facingModeRef.current;
 
-    // Reset guards
-    isPlayingRef.current = false;
-    scanLoopStartedRef.current = false;
-
-    // Dừng luồng cũ
-    if (loadingTimerRef.current) { clearTimeout(loadingTimerRef.current); loadingTimerRef.current = null; }
-    if (scanIntervalRef.current) { clearInterval(scanIntervalRef.current); scanIntervalRef.current = null; }
+    // Reset cờ và dọn dẹp camera cũ
+    if (safetyTimeoutRef.current) {
+      clearTimeout(safetyTimeoutRef.current);
+      safetyTimeoutRef.current = null;
+    }
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
+    if (zxingReaderRef.current) {
+      try { zxingReaderRef.current.reset(); } catch {}
+      zxingReaderRef.current = null;
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => { try { t.stop(); } catch {} });
       streamRef.current = null;
     }
     if (videoRef.current) {
-      try { videoRef.current.pause(); videoRef.current.srcObject = null; } catch {}
+      try {
+        videoRef.current.pause();
+        videoRef.current.srcObject = null;
+      } catch {}
     }
 
+    scanLoopStartedRef.current = false;
     setCameraError(null);
     setNeedsTapToPlay(false);
     setIsLoadingCamera(true);
     setCameraActive(false);
+    setActiveResolution('');
     isHandlingDetectionRef.current = false;
 
     // Kiểm tra HTTPS
     if (typeof window !== 'undefined') {
       const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname);
       if (!window.isSecureContext && !isLocal) {
-        setCameraError('Camera yêu cầu HTTPS. Vui lòng truy cập qua link Vercel (https://...).');
+        setCameraError('Camera yêu cầu HTTPS. Vui lòng mở trang web qua link https://');
         setIsLoadingCamera(false);
         return;
       }
-      // In-app browser detection
       const ua = navigator.userAgent || '';
       if (/FBAN|FBAV|Instagram|Zalo|Line|MicroMessenger/i.test(ua)) {
         setInAppNotice(true);
@@ -249,39 +223,47 @@ export default function ScannerModal({
     }
 
     if (!navigator?.mediaDevices?.getUserMedia) {
-      setCameraError('Trình duyệt không hỗ trợ camera trực tiếp. Bấm "📷 Chụp ảnh bằng máy" bên dưới.');
+      setCameraError('Trình duyệt không hỗ trợ mở camera trực tiếp. Vui lòng bấm "📷 Chụp ảnh bằng máy" bên dưới.');
       setIsLoadingCamera(false);
       return;
     }
 
-    // Đợi phần cứng cũ giải phóng
-    await new Promise((r) => setTimeout(r, 150));
+    // Chờ 100ms để phần cứng giải phóng tài nguyên
+    await new Promise((r) => setTimeout(r, 100));
 
     let stream: MediaStream | null = null;
     let lastError: any = null;
 
-    // Thử 1: deviceId cụ thể
+    // 1. Nếu có deviceId cụ thể
     if (specificDeviceId) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { deviceId: { exact: specificDeviceId } },
+          video: {
+            deviceId: { exact: specificDeviceId },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
           audio: false,
         });
       } catch (e) {
-        console.warn('Thất bại với deviceId, thử facingMode:', e);
+        console.warn('Lỗi với deviceId cụ thể, thử chuyển sang facingMode:', e);
       }
     }
 
-    // Thử 2: facingMode lý tưởng
+    // 2. Thử với facingMode lý tưởng (back hoặc front camera)
     if (!stream) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: desiredFacing } },
+          video: {
+            facingMode: { ideal: desiredFacing },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
           audio: false,
         });
       } catch (e1) {
         lastError = e1;
-        // Thử 3: tối giản
+        // 3. Dự phòng tối giản: chỉ yêu cầu video: true
         try {
           stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         } catch (e2) {
@@ -292,9 +274,10 @@ export default function ScannerModal({
 
     if (!stream) {
       const isDenied = lastError?.name === 'NotAllowedError' || lastError?.name === 'PermissionDeniedError';
-      setCameraError(isDenied
-        ? 'Quyền camera bị từ chối. Vào Cài đặt trình duyệt → bật Camera, hoặc bấm "📷 Chụp ảnh bằng máy".'
-        : 'Không thể mở camera. Bấm "📷 Chụp ảnh bằng máy" hoặc nhập mã thủ công.'
+      setCameraError(
+        isDenied
+          ? 'Quyền camera bị từ chối. Vào Cài đặt trình duyệt → bật Cho phép Camera, hoặc bấm "📷 Chụp ảnh bằng máy".'
+          : 'Không thể mở camera. Bấm "📷 Chụp ảnh bằng máy" hoặc nhập mã thủ công.'
       );
       setIsLoadingCamera(false);
       return;
@@ -302,24 +285,12 @@ export default function ScannerModal({
 
     streamRef.current = stream;
 
-    // Liệt kê camera sau khi đã có stream (để browser cấp label)
+    // Liệt kê danh sách các camera trên thiết bị
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
-      setAvailableDevices(devices.filter((d) => d.kind === 'videoinput'));
+      const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+      setAvailableDevices(videoInputs);
     } catch {}
-
-    // Thiết lập bộ đếm thời gian an toàn 5s
-    loadingTimerRef.current = setTimeout(() => {
-      // Nếu sau 5s vẫn chưa active → hiện tap-to-play
-      setCameraActive((active) => {
-        if (!active) {
-          isPlayingRef.current = false;
-          setNeedsTapToPlay(true);
-          setIsLoadingCamera(false);
-        }
-        return active;
-      });
-    }, 5000);
 
     const video = videoRef.current;
     if (!video) {
@@ -327,25 +298,74 @@ export default function ScannerModal({
       return;
     }
 
-    // ── Thiết lập thuộc tính TRƯỚC khi gán srcObject (quy tắc Safari iOS) ──
+    // Thiết lập thuộc tính bắt buộc cho iOS Safari & Android Chrome
     video.muted = true;
     video.defaultMuted = true;
     video.playsInline = true;
     video.setAttribute('playsinline', 'true');
     video.setAttribute('webkit-playsinline', 'true');
-    video.setAttribute('x-webkit-airplay', 'allow');
     video.setAttribute('muted', '');
     video.setAttribute('autoplay', '');
 
-    // Gán stream — dùng requestAnimationFrame để đảm bảo DOM đã paint
-    requestAnimationFrame(() => {
-      if (!videoRef.current || !streamRef.current) return;
-      videoRef.current.srcObject = streamRef.current;
-      activateVideo(videoRef.current);
-    });
-  }, [activateVideo]);
+    // Gán MediaStream trực tiếp vào video
+    video.srcObject = stream;
 
-  // ─── Xử lý upload ảnh để quét ────────────────────────────────────────────
+    // GỌI video.play() NGAY LẬP TỨC:
+    // Tuyệt đối không chờ loadedmetadata mới play, vì trên mobile Safari / Chrome nếu không gọi play() thì loadedmetadata sẽ KHÔNG BAO GIỜ FIRE (gây deadlock màn hình đen)
+    try {
+      await video.play();
+      setIsLoadingCamera(false);
+      setCameraActive(true);
+      setNeedsTapToPlay(false);
+
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        setActiveResolution(`${video.videoWidth}x${video.videoHeight}`);
+      }
+      startScanningLoop();
+    } catch (playError: any) {
+      console.warn('video.play() bị trình duyệt hoãn / chặn tự phát:', playError);
+      setIsLoadingCamera(false);
+      if (playError?.name === 'NotAllowedError') {
+        setNeedsTapToPlay(true);
+      } else {
+        // Cho phép người dùng chạm để kích hoạt
+        setNeedsTapToPlay(true);
+      }
+    }
+
+    // Safety timeout: nếu sau 4 giây vẫn chưa thấy hình
+    safetyTimeoutRef.current = setTimeout(() => {
+      if (videoRef.current && (videoRef.current.paused || videoRef.current.videoWidth === 0)) {
+        setIsLoadingCamera(false);
+        setNeedsTapToPlay(true);
+      }
+    }, 4000);
+  }, [startScanningLoop]);
+
+  // ─── Tap-to-play khi autoplay bị chính sách trình duyệt chặn ───────────────
+  const handleUserTapToPlay = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      if (!video.srcObject && streamRef.current) {
+        video.srcObject = streamRef.current;
+      }
+      video.muted = true;
+      await video.play();
+      setNeedsTapToPlay(false);
+      setIsLoadingCamera(false);
+      setCameraActive(true);
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        setActiveResolution(`${video.videoWidth}x${video.videoHeight}`);
+      }
+      startScanningLoop();
+    } catch (err) {
+      console.error('Lỗi khi bấm phát video:', err);
+      setCameraError('Trình duyệt không cho phép phát camera trực tiếp. Vui lòng bấm "📷 Chụp ảnh bằng máy" bên dưới.');
+    }
+  };
+
+  // ─── Xử lý upload hoặc chụp ảnh từ camera gốc ────────────────────────────
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -355,7 +375,10 @@ export default function ScannerModal({
     const reader = new FileReader();
     reader.onload = async (evt) => {
       const originalDataUrl = evt.target?.result as string;
-      if (!originalDataUrl) { setIsLoadingCamera(false); return; }
+      if (!originalDataUrl) {
+        setIsLoadingCamera(false);
+        return;
+      }
 
       const img = new Image();
       img.onload = async () => {
@@ -378,7 +401,7 @@ export default function ScannerModal({
         if (BarcodeDetectorClass) {
           try {
             const codes = await new BarcodeDetectorClass().detect(canvas);
-            if (codes.length > 0 && codes[0].rawValue) foundCode = codes[0].rawValue;
+            if (codes.length > 0 && codes[0]?.rawValue) foundCode = codes[0].rawValue;
           } catch {}
         }
 
@@ -394,7 +417,7 @@ export default function ScannerModal({
         if (foundCode) {
           onCodeFound(foundCode, dataUrl);
         } else {
-          setCameraError('Không tìm thấy mã vạch. Hãy chụp lại ở cự ly gần, đủ ánh sáng.');
+          setCameraError('Không tìm thấy mã vạch trong ảnh chụp. Hãy chụp lại ở cự ly gần và đủ ánh sáng.');
         }
       };
       img.src = originalDataUrl;
@@ -403,7 +426,7 @@ export default function ScannerModal({
     e.target.value = '';
   };
 
-  // ─── Đổi camera ──────────────────────────────────────────────────────────
+  // ─── Đổi camera (trước / sau hoặc các ống kính khác) ─────────────────────
   const handleCycleCamera = () => {
     if (availableDevices.length > 1) {
       const nextIndex = (currentDeviceIndex + 1) % availableDevices.length;
@@ -416,20 +439,7 @@ export default function ScannerModal({
     }
   };
 
-  // ─── Tap-to-play khi autoplay bị chặn ───────────────────────────────────
-  const handleUserTapToPlay = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    // Gán lại stream nếu bị mất
-    if (!video.srcObject && streamRef.current) {
-      video.srcObject = streamRef.current;
-    }
-    setNeedsTapToPlay(false);
-    isPlayingRef.current = false;
-    activateVideo(video);
-  };
-
-  // ─── Lifecycle ───────────────────────────────────────────────────────────
+  // ─── Vòng đời modal ───────────────────────────────────────────────────────
   useEffect(() => {
     if (isOpen) {
       setCapturedPhoto(null);
@@ -437,14 +447,18 @@ export default function ScannerModal({
       setCameraError(null);
       setInAppNotice(false);
       isHandlingDetectionRef.current = false;
-      // Đợi modal mount hoàn toàn rồi mới startCamera
-      const t = setTimeout(() => startCamera(), 80);
-      return () => { clearTimeout(t); stopCamera(); };
+      // Chờ 150ms để modal animation ổn định trong DOM rồi mở camera
+      const t = setTimeout(() => {
+        startCamera();
+      }, 150);
+      return () => {
+        clearTimeout(t);
+        stopCamera();
+      };
     } else {
       stopCamera();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
+  }, [isOpen, startCamera, stopCamera]);
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -454,7 +468,10 @@ export default function ScannerModal({
   };
 
   const handleConfirmDetected = () => {
-    if (detectedCode) { onDetected(detectedCode, capturedPhoto || undefined); onClose(); }
+    if (detectedCode) {
+      onDetected(detectedCode, capturedPhoto || undefined);
+      onClose();
+    }
   };
 
   const handleRescan = () => {
@@ -469,20 +486,26 @@ export default function ScannerModal({
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{title}</h3>
             {engineUsed && (
               <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                Động cơ: {engineUsed}
+                Động cơ: {engineUsed} {activeResolution ? `(${activeResolution})` : ''}
               </span>
             )}
           </div>
           <button
             onClick={onClose}
-            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '1.5rem', cursor: 'pointer', lineHeight: 1 }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-muted)',
+              fontSize: '1.5rem',
+              cursor: 'pointer',
+              lineHeight: 1,
+            }}
           >
             &times;
           </button>
@@ -490,14 +513,23 @@ export default function ScannerModal({
 
         {/* Cảnh báo in-app browser */}
         {inAppNotice && (
-          <div style={{ fontSize: '0.75rem', background: '#3b2505', color: '#fed7aa', padding: '6px 10px', borderRadius: 'var(--radius-sm)', marginTop: 8 }}>
-            ⚠️ Đang mở trong ứng dụng khác. Nếu camera bị đen, bấm menu ⋮ → <strong>Mở bằng Chrome / Safari</strong>.
+          <div
+            style={{
+              fontSize: '0.75rem',
+              background: '#3b2505',
+              color: '#fed7aa',
+              padding: '6px 10px',
+              borderRadius: 'var(--radius-sm)',
+              marginTop: 4,
+            }}
+          >
+            ⚠️ Đang mở trong ứng dụng khác. Nếu camera bị đen, hãy bấm menu ⋮ → <strong>Mở bằng Chrome / Safari</strong>.
           </div>
         )}
 
-        {/* Kết quả quét */}
+        {/* Kết quả nhận diện */}
         {detectedCode ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
             <div className="toast-notice info">
               <span>Đã nhận diện: <strong>{detectedCode}</strong></span>
             </div>
@@ -516,34 +548,40 @@ export default function ScannerModal({
             </div>
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-
-            {/* Khung camera */}
-            <div style={{ position: 'relative', width: '100%', height: 290, background: '#050810', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-
-              {/* Video element — luôn render trong DOM */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 6 }}>
+            {/* Khung hiển thị camera */}
+            <div
+              style={{
+                position: 'relative',
+                width: '100%',
+                height: 290,
+                background: '#090d16',
+                borderRadius: 'var(--radius-sm)',
+                overflow: 'hidden',
+              }}
+            >
+              {/* Thẻ video gắn MediaStream */}
               <video
                 ref={videoRef}
                 autoPlay
                 playsInline
                 muted
                 onPlaying={() => {
-                  // Đây là sự kiện đáng tin cậy nhất: stream đang thực sự phát hình
-                  if (loadingTimerRef.current) {
-                    clearTimeout(loadingTimerRef.current);
-                    loadingTimerRef.current = null;
+                  if (safetyTimeoutRef.current) {
+                    clearTimeout(safetyTimeoutRef.current);
+                    safetyTimeoutRef.current = null;
                   }
                   setIsLoadingCamera(false);
                   setNeedsTapToPlay(false);
                   setCameraActive(true);
-                  // Khởi scan loop — guard bên trong sẽ chặn double-call
+                  if (videoRef.current && videoRef.current.videoWidth > 0) {
+                    setActiveResolution(`${videoRef.current.videoWidth}x${videoRef.current.videoHeight}`);
+                  }
                   startScanningLoop();
                 }}
-                onStalled={() => {
-                  // Stream bị treo: thử play lại
-                  if (videoRef.current && streamRef.current) {
-                    isPlayingRef.current = false;
-                    activateVideo(videoRef.current);
+                onLoadedMetadata={() => {
+                  if (videoRef.current && videoRef.current.videoWidth > 0) {
+                    setActiveResolution(`${videoRef.current.videoWidth}x${videoRef.current.videoHeight}`);
                   }
                 }}
                 style={{
@@ -553,58 +591,103 @@ export default function ScannerModal({
                   height: '100%',
                   objectFit: 'cover',
                   display: 'block',
-                  // QUAN TRỌNG: KHÔNG đặt background #000 vì sẽ che stream trên một số WebKit
                 }}
               />
 
               {/* Loading overlay */}
               {isLoadingCamera && !cameraError && (
-                <div style={{
-                  position: 'absolute', inset: 0,
-                  background: 'rgba(5,8,16,0.85)',
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                  color: '#fff', gap: 10, zIndex: 5,
-                }}>
-                  <div style={{ width: 30, height: 30, border: '3px solid rgba(255,255,255,0.2)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: 'rgba(9, 13, 22, 0.85)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#fff',
+                    gap: 10,
+                    zIndex: 5,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 32,
+                      height: 32,
+                      border: '3px solid rgba(255,255,255,0.2)',
+                      borderTopColor: 'var(--primary)',
+                      borderRadius: '50%',
+                      animation: 'spin 0.8s linear infinite',
+                    }}
+                  />
                   <span style={{ fontSize: '0.85rem' }}>Đang kết nối camera...</span>
-                  <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.55)' }}>Bấm &ldquo;Cho phép&rdquo; nếu máy hỏi quyền</span>
+                  <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.6)' }}>
+                    Bấm &ldquo;Cho phép&rdquo; nếu trình duyệt hỏi quyền
+                  </span>
                 </div>
               )}
 
-              {/* Tap-to-play overlay */}
+              {/* Tap to play nếu autoplay bị chặn */}
               {needsTapToPlay && !isLoadingCamera && !cameraError && (
-                <div style={{
-                  position: 'absolute', inset: 0,
-                  background: 'rgba(5,8,16,0.8)',
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                  gap: 14, zIndex: 7, padding: 16, textAlign: 'center',
-                }}>
-                  <span style={{ fontSize: '0.85rem', color: '#e2e8f0' }}>Camera đã kết nối. Bấm để bắt đầu:</span>
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: 'rgba(9, 13, 22, 0.82)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 14,
+                    zIndex: 7,
+                    padding: 16,
+                    textAlign: 'center',
+                  }}
+                >
+                  <span style={{ fontSize: '0.85rem', color: '#e2e8f0' }}>
+                    Camera đã sẵn sàng. Chạm bên dưới để hiển thị hình ảnh:
+                  </span>
                   <button
                     type="button"
                     className="btn btn-primary"
-                    style={{ padding: '12px 24px', fontSize: '1rem', fontWeight: 700 }}
+                    style={{ padding: '12px 26px', fontSize: '1rem', fontWeight: 700 }}
                     onClick={handleUserTapToPlay}
                   >
-                    ▶ Bật Camera
+                    ▶ Bật hiển thị Camera
                   </button>
                 </div>
               )}
 
-              {/* Viewfinder khi active */}
+              {/* Viewfinder khung ngắm quét */}
               {cameraActive && !isLoadingCamera && !needsTapToPlay && !cameraError && (
-                <div style={{
-                  position: 'absolute', top: '15%', left: '8%', width: '84%', height: '70%',
-                  border: '2px solid rgba(59,130,246,0.9)', borderRadius: 14,
-                  boxShadow: '0 0 0 9999px rgba(0,0,0,0.42)', pointerEvents: 'none', zIndex: 4,
-                }}>
-                  {/* Thanh quét chạy dọc */}
-                  <div style={{
-                    position: 'absolute', top: '50%', left: 0, right: 0,
-                    height: 2, background: 'rgba(59,130,246,0.8)',
-                    boxShadow: '0 0 8px #3b82f6', transform: 'translateY(-50%)',
-                  }} />
-                  {/* 4 góc highlight */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '15%',
+                    left: '8%',
+                    width: '84%',
+                    height: '70%',
+                    border: '2px solid rgba(59,130,246,0.9)',
+                    borderRadius: 14,
+                    boxShadow: '0 0 0 9999px rgba(0,0,0,0.42)',
+                    pointerEvents: 'none',
+                    zIndex: 4,
+                  }}
+                >
+                  {/* Tia laser quét ngang */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '50%',
+                      left: 0,
+                      right: 0,
+                      height: 2,
+                      background: 'rgba(59,130,246,0.85)',
+                      boxShadow: '0 0 8px #3b82f6',
+                      transform: 'translateY(-50%)',
+                    }}
+                  />
+                  {/* 4 góc ngắm */}
                   {[
                     { top: -2, left: -2, borderTop: '3px solid #60a5fa', borderLeft: '3px solid #60a5fa', borderRight: 'none', borderBottom: 'none' },
                     { top: -2, right: -2, borderTop: '3px solid #60a5fa', borderRight: '3px solid #60a5fa', borderLeft: 'none', borderBottom: 'none' },
@@ -616,13 +699,25 @@ export default function ScannerModal({
                 </div>
               )}
 
-              {/* Error overlay */}
+              {/* Overlay hiển thị lỗi */}
               {cameraError && (
-                <div style={{
-                  position: 'absolute', inset: 0, padding: 16, textAlign: 'center',
-                  color: '#fca5a5', fontSize: '0.85rem', background: 'rgba(15,23,42,0.95)',
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, zIndex: 8,
-                }}>
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    padding: 16,
+                    textAlign: 'center',
+                    color: '#fca5a5',
+                    fontSize: '0.85rem',
+                    background: 'rgba(15,23,42,0.95)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 12,
+                    zIndex: 8,
+                  }}
+                >
                   <div style={{ lineHeight: 1.5 }}>{cameraError}</div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
                     <button className="btn btn-secondary" style={{ fontSize: '0.8rem' }} onClick={() => startCamera()}>
@@ -636,12 +731,20 @@ export default function ScannerModal({
               )}
             </div>
 
-            {/* Nút điều khiển */}
+            {/* Các nút điều khiển tiện ích */}
             <div style={{ display: 'flex', gap: 8 }}>
               <button
                 type="button"
                 className="btn btn-primary"
-                style={{ flex: 2, fontSize: '0.85rem', padding: '9px 12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                style={{
+                  flex: 2,
+                  fontSize: '0.85rem',
+                  padding: '9px 12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                }}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <span>📷</span>
@@ -653,9 +756,9 @@ export default function ScannerModal({
                 className="btn btn-secondary"
                 style={{ flex: 1, fontSize: '0.85rem', padding: '9px 10px' }}
                 onClick={handleCycleCamera}
-                title="Đổi camera trước / sau"
+                title="Đổi camera trước / sau hoặc ống kính khác"
               >
-                🔄 Đổi cam
+                🔄 Đổi cam {availableDevices.length > 1 ? `(${currentDeviceIndex + 1}/${availableDevices.length})` : ''}
               </button>
 
               <input
@@ -670,9 +773,9 @@ export default function ScannerModal({
           </div>
         )}
 
-        {/* Nhập thủ công */}
+        {/* Nhập mã thủ công */}
         {allowManual && (
-          <form onSubmit={handleManualSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
+          <form onSubmit={handleManualSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
             <div className="form-label">Hoặc nhập SN / Mã quản lý thủ công:</div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input
