@@ -142,34 +142,18 @@ export default function ThemeSwitcher() {
       {/* Popover / Modal chọn giao diện */}
       {isOpen && (
         <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.65)',
-            backdropFilter: 'blur(8px)',
-            zIndex: 100,
-            display: 'flex',
-            alignItems: 'flex-end',
-            justifyContent: 'center',
-            padding: 16,
-          }}
+          className="modal-overlay"
           onClick={() => setIsOpen(false)}
         >
           <div
+            className="modal-content"
             style={{
-              width: '100%',
               maxWidth: 460,
-              maxHeight: '90vh',
-              overflowY: 'auto',
               background: '#0d1117',
               border: '1px solid rgba(255,255,255,0.18)',
               borderRadius: 20,
               padding: 18,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 12,
               boxShadow: '0 20px 50px rgba(0,0,0,0.85)',
-              animation: 'slideUp 0.2s ease-out',
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -192,6 +176,7 @@ export default function ThemeSwitcher() {
                   fontSize: '1.3rem',
                   cursor: 'pointer',
                   padding: 4,
+                  transition: 'transform 0.15s ease',
                 }}
               >
                 ✕
@@ -211,7 +196,8 @@ export default function ThemeSwitcher() {
                       cursor: 'pointer',
                       border: isSelected ? `2px solid ${opt.color}` : '1px solid rgba(255,255,255,0.08)',
                       background: isSelected ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.02)',
-                      transition: 'all 0.18s ease',
+                      transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                      transform: isSelected ? 'scale(1.01)' : 'none',
                       display: 'flex',
                       flexDirection: 'column',
                       gap: 4,

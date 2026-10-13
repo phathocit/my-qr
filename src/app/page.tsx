@@ -1651,6 +1651,7 @@ export default function HomePage() {
       {/* Floating Notice Toast (Luôn nổi trên mọi Modal và Overlay) */}
       {notification && (
         <div
+          className="notification-toast-floating"
           style={{
             position: 'fixed',
             top: 20,
@@ -1707,7 +1708,7 @@ export default function HomePage() {
       <main className="main-content">
         {/* ================= TAB 1: TRA CỨU & QUÉT ================= */}
         {activeTab === 'search' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="tab-pane-animated" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="card">
               <div className="card-title">
                 <span>Tra cứu nhanh thiết bị</span>
@@ -2149,7 +2150,7 @@ export default function HomePage() {
 
         {/* ================= TAB 2: NHẬP KHO ================= */}
         {activeTab === 'inbound' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="tab-pane-animated" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="card">
               <div className="card-title">
                 <span>Tạo phiếu nhập từ NCC</span>
@@ -2511,7 +2512,7 @@ export default function HomePage() {
 
         {/* ================= TAB 3: XUẤT KHO & BÀN GIAO ================= */}
         {activeTab === 'outbound' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="tab-pane-animated" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="card">
               <div className="card-title">
                 <span>Phiếu xuất kho / Bàn giao</span>
@@ -2759,7 +2760,7 @@ export default function HomePage() {
 
         {/* ================= TAB 4: BẢO HÀNH ================= */}
         {activeTab === 'warranty' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="tab-pane-animated" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="card">
               <div className="card-title">
                 <span>Hồ sơ bảo hành 2 phía ({warrantyCases.length})</span>
@@ -2954,7 +2955,7 @@ export default function HomePage() {
 
         {/* ================= TAB 5: TỒN KHO & DANH SÁCH THEO MODEL (ACCORDION) ================= */}
         {activeTab === 'inventory' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="tab-pane-animated" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {/* Header tổng quan */}
             <div className="card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
@@ -3096,7 +3097,7 @@ export default function HomePage() {
                             style={{
                               display: 'inline-block',
                               transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                              transition: 'transform 0.2s ease',
+                              transition: 'transform 0.26s cubic-bezier(0.16, 1, 0.3, 1)',
                               fontSize: '0.8rem',
                               color: 'var(--primary)',
                             }}
@@ -3172,6 +3173,7 @@ export default function HomePage() {
                     {/* Danh sách các Serial của Model (Accordion Body) */}
                     {isExpanded && (
                       <div
+                        className="accordion-body-animated"
                         style={{
                           padding: '10px 14px',
                           display: 'flex',

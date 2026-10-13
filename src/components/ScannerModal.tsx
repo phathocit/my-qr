@@ -1136,6 +1136,7 @@ export default function ScannerModal({
                 {/* Khung chữ nhật rộng rãi trợ ngắm */}
                 <div
                   ref={viewfinderBoxRef}
+                  className="scanner-reticle-box"
                   style={{
                     position: 'relative',
                     width: '88%',
@@ -1143,7 +1144,6 @@ export default function ScannerModal({
                     height: 160,
                     border: '2px solid rgba(59, 130, 246, 0.9)',
                     borderRadius: 14,
-                    boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.38)',
                     overflow: 'hidden',
                   }}
                 >
@@ -1469,6 +1469,7 @@ export default function ScannerModal({
               {scannedBatch.map((item, idx) => (
                 <div
                   key={`${item.code}-${idx}`}
+                  className="scanned-batch-chip"
                   style={{
                     display: 'flex',
                     alignItems: 'center',
