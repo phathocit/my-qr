@@ -160,3 +160,32 @@ export interface EvidencePhoto {
   performer?: string;
   created_at: string;
 }
+
+export type SheetsEntityType = 'CATALOG' | 'DEVICE' | 'WARRANTY_CASE';
+export type SheetsSyncStatus = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED' | 'FATAL_ERROR';
+
+export interface SheetsSyncOutbox {
+  id: string;
+  entity_type: SheetsEntityType;
+  entity_id: string;
+  model_id?: string | null;
+  action: 'UPSERT' | 'DELETE';
+  status: SheetsSyncStatus;
+  retry_count: number;
+  max_retries: number;
+  next_retry_at: string;
+  last_error?: string | null;
+  locked_at?: string | null;
+  locked_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SheetsModelMapping {
+  model_id: string;
+  sheet_id: number;
+  tab_title: string;
+  created_at: string;
+  updated_at: string;
+}
+

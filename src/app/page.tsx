@@ -123,6 +123,41 @@ export default function HomePage() {
   const [outboundWarrantyMonths, setOutboundWarrantyMonths] = useState<number>(12);
   const [outboundWarrantyNotes, setOutboundWarrantyNotes] = useState('Bảo hành tiêu chuẩn công ty');
 
+  // Google Sheets Sync & Observability State
+  const [sheetsModalOpen, setSheetsModalOpen] = useState(false);
+  const [sheetsLoading, setSheetsLoading] = useState(false);
+  const [sheetsStatus, setSheetsStatus] = useState<any>(null);
+
+  const fetchSheetsStatus = async () => {
+    try {
+      setSheetsLoading(true);
+      const res = await fetch('/api/sync/sheets');
+      const data = await res.json();
+      setSheetsStatus(data);
+    } catch (err: any) {
+      showNotice(err?.message || 'Lỗi khi kiểm tra Google Sheets', 'error');
+    } finally {
+      setSheetsLoading(false);
+    }
+  };
+
+  const handleSheetsAction = async (action: string) => {
+    try {
+      setSheetsLoading(true);
+      const res = await fetch(`/api/sync/sheets?action=${action}`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Thao tác không thành công');
+      }
+      showNotice(data.message || 'Thao tác thành công', 'success');
+      await fetchSheetsStatus();
+    } catch (err: any) {
+      showNotice(err?.message || 'Lỗi đồng bộ Google Sheets', 'error');
+    } finally {
+      setSheetsLoading(false);
+    }
+  };
+
   // Initial Load
   const refreshData = async () => {
     setIsMock(inventoryService.isUsingMock());
@@ -958,6 +993,17 @@ export default function HomePage() {
           <span>📦 Quản Lý Thiết Bị CNTT</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            onClick={() => {
+              setSheetsModalOpen(true);
+              fetchSheetsStatus();
+            }}
+            className="btn btn-secondary"
+            style={{ fontSize: '0.75rem', padding: '4px 8px', display: 'flex', alignItems: 'center', gap: 4 }}
+            title="Quan sát & Đồng bộ Google Sheets"
+          >
+            📊 Sheets
+          </button>
           {isMock ? (
             <span className="env-badge warning">Demo Local (Mock)</span>
           ) : (
@@ -2946,6 +2992,196 @@ export default function HomePage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Google Sheets Sync & Outbox Observability Modal */}
+      {sheetsModalOpen && (
+        <div className="modal-overlay" onClick={() => setSheetsModalOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 600 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>📊 Đồng bộ Google Sheets & Hàng đợi Outbox</h3>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                  Quan sát hàng đợi đồng bộ một chiều (DB → Sheets) và đối soát dữ liệu
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSheetsModalOpen(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  lineHeight: 1,
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 14 }}>
+              {/* Trạng thái kết nối Google Sheets */}
+              <div
+                style={{
+                  background: 'var(--bg-input)',
+                  padding: 12,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-color)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Cấu hình Google Sheets API:</span>
+                  {sheetsStatus?.configured ? (
+                    <span style={{ fontSize: '0.75rem', color: 'var(--success)', fontWeight: 600 }}>
+                      ✓ Đã kết nối Service Account
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: '0.75rem', color: 'var(--warning)', fontWeight: 600 }}>
+                      ⚠️ Chưa cấu hình biến môi trường
+                    </span>
+                  )}
+                </div>
+                {sheetsStatus?.configured ? (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <div>• Email: <code>{sheetsStatus.serviceAccount}</code></div>
+                    <div>• Spreadsheet ID: <code>{sheetsStatus.spreadsheetId}</code></div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    Cần thiết lập <code>GOOGLE_SERVICE_ACCOUNT_EMAIL</code>, <code>GOOGLE_PRIVATE_KEY</code>, và <code>GOOGLE_SHEETS_SPREADSHEET_ID</code> trong <code>.env.local</code> hoặc cài đặt Vercel.
+                  </div>
+                )}
+              </div>
+
+              {/* Thống kê Outbox Queue */}
+              <div
+                style={{
+                  background: 'var(--bg-input)',
+                  padding: 12,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-color)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Trạng thái hàng đợi Outbox:</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                    onClick={fetchSheetsStatus}
+                    disabled={sheetsLoading}
+                  >
+                    🔄 Làm mới
+                  </button>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, textAlign: 'center' }}>
+                  <div style={{ padding: '8px 4px', background: 'rgba(255,255,255,0.04)', borderRadius: 4 }}>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                      {sheetsStatus?.outboxStats?.pending || 0}
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Chờ gửi</div>
+                  </div>
+                  <div style={{ padding: '8px 4px', background: 'rgba(59,130,246,0.1)', borderRadius: 4 }}>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--primary)' }}>
+                      {sheetsStatus?.outboxStats?.processing || 0}
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Đang xử lý</div>
+                  </div>
+                  <div style={{ padding: '8px 4px', background: 'rgba(34,197,94,0.1)', borderRadius: 4 }}>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--success)' }}>
+                      {sheetsStatus?.outboxStats?.success || 0}
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Thành công</div>
+                  </div>
+                  <div style={{ padding: '8px 4px', background: 'rgba(234,179,8,0.1)', borderRadius: 4 }}>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--warning)' }}>
+                      {sheetsStatus?.outboxStats?.failed || 0}
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Chờ retry</div>
+                  </div>
+                  <div style={{ padding: '8px 4px', background: 'rgba(239,68,68,0.1)', borderRadius: 4 }}>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger)' }}>
+                      {sheetsStatus?.outboxStats?.fatal_error || 0}
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Lỗi cố định</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Danh sách lỗi gần nhất nếu có */}
+              {sheetsStatus?.recentErrors && sheetsStatus.recentErrors.length > 0 && (
+                <div
+                  style={{
+                    background: 'rgba(239,68,68,0.06)',
+                    padding: 12,
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid rgba(239,68,68,0.2)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--danger)' }}>
+                    ⚠️ Lỗi đồng bộ ghi nhận gần nhất:
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 120, overflowY: 'auto' }}>
+                    {sheetsStatus.recentErrors.map((err: any) => (
+                      <div key={err.id} style={{ fontSize: '0.72rem', color: 'var(--text-muted)', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 4 }}>
+                        <strong style={{ color: 'var(--text-main)' }}>[{err.entity_type}]</strong> {err.last_error || 'Không có mô tả lỗi'}
+                        <span style={{ color: 'var(--warning)', marginLeft: 6 }}>(Đã thử: {err.retry_count} lần)</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ flex: 1, padding: '10px 12px', fontSize: '0.85rem' }}
+                    onClick={() => handleSheetsAction('reconcile_catalog')}
+                    disabled={sheetsLoading || !sheetsStatus?.configured}
+                  >
+                    {sheetsLoading ? 'Đang thực thi...' : '📋 Đối soát tab Danh mục (Giai đoạn 1)'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ flex: 1, padding: '10px 12px', fontSize: '0.85rem' }}
+                    onClick={() => handleSheetsAction('sync_pending')}
+                    disabled={sheetsLoading || !sheetsStatus?.configured}
+                  >
+                    🔄 Xử lý Outbox đang chờ
+                  </button>
+                </div>
+
+                {sheetsStatus?.outboxStats?.failed > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ width: '100%', padding: '8px', fontSize: '0.8rem', color: 'var(--warning)' }}
+                    onClick={() => handleSheetsAction('retry_failed')}
+                    disabled={sheetsLoading || !sheetsStatus?.configured}
+                  >
+                    🔁 Thử lại ngay các job thất bại ({sheetsStatus.outboxStats.failed})
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
