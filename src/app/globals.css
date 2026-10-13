@@ -397,4 +397,204 @@ body {
   100% { top: 92%; opacity: 0.9; }
 }
 
+/* ═══════════════════════════════════════════════════════════════════ */
+/* THEME 1: SLEEK GLASSMORPHISM (Mặc định - Linear / Vercel Glass)     */
+/* ═══════════════════════════════════════════════════════════════════ */
+[data-theme="glass"] {
+  --bg-primary: #07090e;
+  --bg-card: rgba(18, 24, 38, 0.72);
+  --bg-card-hover: rgba(30, 41, 59, 0.85);
+  --bg-input: rgba(11, 16, 26, 0.85);
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-focus: #3b82f6;
+
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  --primary: #3b82f6;
+  --primary-hover: #2563eb;
+  --primary-light: rgba(59, 130, 246, 0.15);
+
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+}
+
+[data-theme="glass"] body {
+  background: radial-gradient(circle at 50% -10%, rgba(59, 130, 246, 0.15), transparent 60%),
+              radial-gradient(circle at 100% 50%, rgba(139, 92, 246, 0.08), transparent 45%),
+              #07090e;
+}
+
+[data-theme="glass"] .app-container {
+  background: transparent;
+}
+
+[data-theme="glass"] .card {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.42);
+}
+
+[data-theme="glass"] .app-header {
+  background: rgba(11, 16, 26, 0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="glass"] .bottom-nav {
+  background: rgba(11, 16, 26, 0.82);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="glass"] .btn-primary {
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+}
+
+[data-theme="glass"] .btn-primary:active {
+  transform: scale(0.98);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+}
+
+[data-theme="glass"] .input,
+[data-theme="glass"] .select,
+[data-theme="glass"] .textarea {
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════ */
+/* THEME 2: FULL-WIDTH SAAS DASHBOARD (Mở rộng toàn màn hình PC/Laptop)*/
+/* ═══════════════════════════════════════════════════════════════════ */
+[data-theme="dashboard"] {
+  --bg-primary: #0b0f19;
+  --bg-card: #111827;
+  --bg-card-hover: #1f2937;
+  --bg-input: #0b0f19;
+  --border-color: #1f2937;
+  --border-focus: #6366f1;
+
+  --text-primary: #f9fafb;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+
+  --primary: #6366f1;
+  --primary-hover: #4f46e5;
+  --primary-light: rgba(99, 102, 241, 0.15);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+}
+
+[data-theme="dashboard"] body {
+  background-color: #0b0f19;
+}
+
+@media (min-width: 768px) {
+  [data-theme="dashboard"] .app-container {
+    max-width: 1200px;
+    width: 95%;
+    margin: 0 auto;
+    box-shadow: none;
+    border-left: 1px solid #1f2937;
+    border-right: 1px solid #1f2937;
+  }
+
+  [data-theme="dashboard"] .bottom-nav {
+    max-width: 1200px;
+    border-radius: 14px 14px 0 0;
+    border-left: 1px solid #1f2937;
+    border-right: 1px solid #1f2937;
+  }
+}
+
+[data-theme="dashboard"] .card {
+  border: 1px solid #1f2937;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="dashboard"] .btn-primary {
+  background: #6366f1;
+}
+[data-theme="dashboard"] .btn-primary:active {
+  background: #4f46e5;
+}
+
+/* ═══════════════════════════════════════════════════════════════════ */
+/* THEME 3: WAREHOUSE PRO / INDUSTRIAL (Kho vận kỹ thuật cao)          */
+/* ═══════════════════════════════════════════════════════════════════ */
+[data-theme="industrial"] {
+  --bg-primary: #09090b;
+  --bg-card: #121215;
+  --bg-card-hover: #1c1c21;
+  --bg-input: #050507;
+  --border-color: #27272a;
+  --border-focus: #f59e0b;
+
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+
+  --primary: #f59e0b;
+  --primary-hover: #d97706;
+  --primary-light: rgba(245, 158, 11, 0.15);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --font-family: ui-monospace, "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
+}
+
+[data-theme="industrial"] body {
+  background-color: #09090b;
+  background-image: linear-gradient(rgba(245, 158, 11, 0.035) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(245, 158, 11, 0.035) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+[data-theme="industrial"] .card {
+  border: 1px solid #27272a;
+  border-left: 4px solid #f59e0b;
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="industrial"] .btn-primary {
+  background: #f59e0b;
+  color: #000;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-radius: 4px;
+}
+
+[data-theme="industrial"] .btn-primary:active {
+  background: #d97706;
+}
+
+[data-theme="industrial"] .badge {
+  border-radius: 4px;
+  text-transform: uppercase;
+  font-family: ui-monospace, monospace;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+[data-theme="industrial"] .input,
+[data-theme="industrial"] .select,
+[data-theme="industrial"] .textarea {
+  border: 1px solid #3f3f46;
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+}
+
+
 
