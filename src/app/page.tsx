@@ -180,6 +180,9 @@ export default function HomePage() {
   const [sheetsLoading, setSheetsLoading] = useState(false);
   const [sheetsStatus, setSheetsStatus] = useState<any>(null);
 
+  // Export Report Modal State
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+
   const fetchSheetsStatus = async () => {
     try {
       setSheetsLoading(true);
@@ -1126,8 +1129,8 @@ export default function HomePage() {
     setExpandedModels(next);
   };
 
-  // Xuất báo cáo tồn kho ra file Excel/CSV (UTF-8 có BOM tương thích Excel tiếng Việt)
-  const exportInventoryToCsv = () => {
+  // Xuất báo cáo tồn kho chuyên nghiệp (Excel .xls định dạng chuẩn hoặc CSV UTF-8)
+  const exportInventoryReport = (formatType: 'excel' | 'csv' = 'excel') => {
     try {
       const filteredDevices = groupedInventoryModels.flatMap((g) => g.items);
       if (filteredDevices.length === 0) {
@@ -1135,7 +1138,231 @@ export default function HomePage() {
         return;
       }
 
+      const today = new Date();
+      const dateStr = today.toISOString().slice(0, 10);
+      const timeStr = today.toLocaleTimeString('vi-VN');
+      const dayStr = String(today.getDate()).padStart(2, '0');
+      const monthStr = String(today.getMonth() + 1).padStart(2, '0');
+      const fullDateDisplay = `${dayStr}/${monthStr}/${today.getFullYear()}`;
+
+      // Thống kê nhanh
+      let inStockCount = 0;
+      let exportedCount = 0;
+      let usableCount = 0;
+      let needsInspectionCount = 0;
+      let faultyCount = 0;
+
+      const filterLabel =
+        inventoryFilter === 'ALL'
+          ? 'Tất cả thiết bị'
+          : inventoryFilter === 'STORAGE'
+          ? 'Trong kho (Sẵn sàng)'
+          : inventoryFilter === 'EXPORTED'
+          ? 'Đã xuất kho'
+          : inventoryFilter === 'THIS_MONTH'
+          ? 'Nhập trong tháng này'
+          : inventoryFilter === 'EXTERNAL'
+          ? 'Đang bên ngoài (Khách / Mượn)'
+          : inventoryFilter === 'WARRANTY'
+          ? 'Bảo hành NCC'
+          : 'Cần kiểm tra';
+
+      filteredDevices.forEach((d) => {
+        if (d.outbound_date) exportedCount++;
+        else inStockCount++;
+
+        if (d.technical_condition === 'USABLE') usableCount++;
+        else if (d.technical_condition === 'NEEDS_INSPECTION') needsInspectionCount++;
+        else if (d.technical_condition === 'FAULTY') faultyCount++;
+      });
+
+      if (formatType === 'excel') {
+        const tableRows = filteredDevices
+          .map((dev, idx) => {
+            const inDate = dev.inbound_date || dev.inbound_receipt?.received_date || dev.created_at;
+            const isExported = !!dev.outbound_date;
+            const outStatusText = isExported
+              ? 'Đã xuất kho'
+              : dev.holder_type === 'EXTERNAL_PARTY'
+              ? 'Đang mượn / Bàn giao'
+              : 'Trong kho (Sẵn sàng)';
+
+            const holderText =
+              dev.holder_type === 'INTERNAL_STORAGE'
+                ? 'Kho nội bộ'
+                : dev.holder_type === 'SUPPLIER_WARRANTY'
+                ? 'TTBH Nhà cung cấp'
+                : dev.holder_party?.name || 'Bên ngoài';
+
+            const ownerText = dev.owner_type === 'INTERNAL' ? 'Nội bộ' : dev.owner_party?.name || 'Khách hàng';
+
+            const condText =
+              dev.technical_condition === 'USABLE'
+                ? 'Sử dụng tốt'
+                : dev.technical_condition === 'NEEDS_INSPECTION'
+                ? 'Cần kiểm tra'
+                : 'Hỏng / Lỗi';
+
+            const condBg =
+              dev.technical_condition === 'USABLE'
+                ? '#dcfce7'
+                : dev.technical_condition === 'NEEDS_INSPECTION'
+                ? '#fef3c7'
+                : '#fee2e2';
+
+            const condColor =
+              dev.technical_condition === 'USABLE'
+                ? '#15803d'
+                : dev.technical_condition === 'NEEDS_INSPECTION'
+                ? '#b45309'
+                : '#b91c1c';
+
+            const outBg = isExported ? '#f3e8ff' : '#dcfce7';
+            const outColor = isExported ? '#7c3aed' : '#15803d';
+
+            const supWarrantyText = dev.supplier_warranty?.has_warranty
+              ? `Đến ${formatDateDisplay(dev.supplier_warranty.end_date)}`
+              : 'Không';
+
+            const cusWarrantyText = dev.customer_warranty?.has_warranty
+              ? `Đến ${formatDateDisplay(dev.customer_warranty.end_date)}`
+              : 'Không';
+
+            const rowBg = idx % 2 === 0 ? '#ffffff' : '#f8fafc';
+
+            return `
+              <tr style="background-color: ${rowBg}; height: 28px;">
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; font-size: 11pt;">${idx + 1}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; font-weight: bold; mso-number-format:'\\@'; font-size: 11pt;">${dev.management_code}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: left; padding: 6px 10px; font-size: 11pt; font-weight: 600;">${dev.product?.name || ''}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; font-size: 11pt;">${dev.product?.brand || ''}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; font-size: 11pt;">${dev.product?.category || ''}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; mso-number-format:'\\@'; font-family: Consolas, monospace; font-size: 11pt;">${dev.serial_number || '-'}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; color: #1d4ed8; font-weight: 600; font-size: 11pt;">${formatDateDisplay(inDate)}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; color: ${outColor}; font-weight: 600; font-size: 11pt;">${dev.outbound_date ? formatDateDisplay(dev.outbound_date) : 'Chưa xuất'}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; font-weight: 600; font-size: 10.5pt; background-color: ${outBg}; color: ${outColor};">${outStatusText}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: left; padding: 6px 8px; font-size: 11pt;">${holderText}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: left; padding: 6px 8px; font-size: 11pt;">${ownerText}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; font-weight: 600; font-size: 10.5pt; background-color: ${condBg}; color: ${condColor};">${condText}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; font-size: 11pt;">${dev.lifecycle}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; font-size: 11pt;">${supWarrantyText}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; font-size: 11pt;">${cusWarrantyText}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; mso-number-format:'\\@'; font-size: 11pt;">${dev.inbound_receipt?.code || '-'}</td>
+                <td style="border: 1px solid #cbd5e1; text-align: center; padding: 6px 8px; mso-number-format:'\\@'; font-size: 11pt;">${dev.outbound_receipt?.code || '-'}</td>
+              </tr>
+            `;
+          })
+          .join('');
+
+        const excelHtml = `
+          <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+          <head>
+            <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+            <!--[if gte mso 9]>
+            <xml>
+              <x:ExcelWorkbook>
+                <x:ExcelWorksheets>
+                  <x:ExcelWorksheet>
+                    <x:Name>Báo Cáo Tồn Kho</x:Name>
+                    <x:WorksheetOptions>
+                      <x:DisplayGridlines/>
+                    </x:WorksheetOptions>
+                  </x:ExcelWorksheet>
+                </x:ExcelWorksheets>
+              </x:ExcelWorkbook>
+            </xml>
+            <![endif]-->
+            <style>
+              body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; }
+              table { border-collapse: collapse; width: 100%; }
+              th { background-color: #1e40af; color: #ffffff; font-weight: bold; font-size: 11pt; padding: 8px 10px; border: 1px solid #94a3b8; text-align: center; height: 35px; }
+              td { font-size: 11pt; }
+            </style>
+          </head>
+          <body>
+            <table>
+              <!-- Dòng 1: Banner Tiêu đề -->
+              <tr>
+                <td colspan="17" style="background-color: #1e3a8a; color: #ffffff; font-size: 16pt; font-weight: bold; text-align: center; padding: 14px 10px; height: 45px;">
+                  BÁO CÁO TỒN KHO & THEO DÕI THIẾT BỊ CNTT
+                </td>
+              </tr>
+              <!-- Dòng 2: Phụ đề hệ thống -->
+              <tr>
+                <td colspan="17" style="background-color: #f1f5f9; color: #475569; font-size: 11pt; font-style: italic; text-align: center; padding: 6px 10px; border-bottom: 1px solid #cbd5e1;">
+                  Hệ thống Quản lý Thiết bị & Kho QR Code - Công ty CP Công Nghệ Á Châu
+                </td>
+              </tr>
+              <!-- Dòng 3: Thông tin Metadata & Thống kê -->
+              <tr>
+                <td colspan="17" style="background-color: #f8fafc; color: #334155; font-size: 10.5pt; text-align: center; padding: 8px 10px; border-bottom: 2px solid #94a3b8;">
+                  <strong>Thời gian xuất:</strong> ${timeStr} ngày ${fullDateDisplay} &nbsp;|&nbsp; 
+                  <strong>Bộ lọc:</strong> ${filterLabel} &nbsp;|&nbsp; 
+                  <strong>Tổng số lượng:</strong> ${filteredDevices.length} thiết bị &nbsp;|&nbsp; 
+                  <strong>Trong kho:</strong> ${inStockCount} &nbsp;|&nbsp; 
+                  <strong>Đã xuất:</strong> ${exportedCount}
+                </td>
+              </tr>
+              <!-- Dòng 4: Dòng trống cách điệu -->
+              <tr style="height: 12px;">
+                <td colspan="17" style="border: none;"></td>
+              </tr>
+              <!-- Dòng 5: Tiêu đề cột -->
+              <thead>
+                <tr>
+                  <th style="width: 50px;">STT</th>
+                  <th style="width: 130px;">Mã quản lý</th>
+                  <th style="width: 240px;">Tên Model / Sản phẩm</th>
+                  <th style="width: 120px;">Thương hiệu</th>
+                  <th style="width: 130px;">Phân loại</th>
+                  <th style="width: 170px;">Số Serial (SN)</th>
+                  <th style="width: 130px;">Ngày nhập kho</th>
+                  <th style="width: 130px;">Ngày xuất kho</th>
+                  <th style="width: 150px;">Trạng thái xuất/kho</th>
+                  <th style="width: 170px;">Vị trí / Bên giữ</th>
+                  <th style="width: 170px;">Chủ sở hữu</th>
+                  <th style="width: 140px;">Tình trạng kỹ thuật</th>
+                  <th style="width: 110px;">Vòng đời</th>
+                  <th style="width: 140px;">Bảo hành NCC</th>
+                  <th style="width: 140px;">Bảo hành Khách</th>
+                  <th style="width: 140px;">Phiếu nhập</th>
+                  <th style="width: 140px;">Phiếu xuất</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${tableRows}
+              </tbody>
+              <!-- Dòng Tổng cộng cuối bảng -->
+              <tfoot>
+                <tr style="background-color: #e2e8f0; font-weight: bold; height: 35px;">
+                  <td colspan="5" style="border: 1px solid #94a3b8; text-align: center; font-size: 11pt; padding: 8px;">TỔNG CỘNG THỐNG KÊ</td>
+                  <td style="border: 1px solid #94a3b8; text-align: center; font-size: 11pt;">${filteredDevices.length} thiết bị</td>
+                  <td colspan="2" style="border: 1px solid #94a3b8; text-align: center; font-size: 11pt; background-color: #dbeafe; color: #1e40af;">Trong kho: ${inStockCount} | Đã xuất: ${exportedCount}</td>
+                  <td colspan="9" style="border: 1px solid #94a3b8; text-align: center; font-size: 11pt; background-color: #fef3c7; color: #92400e;">Sử dụng tốt: ${usableCount} | Cần kiểm tra: ${needsInspectionCount} | Hỏng: ${faultyCount}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </body>
+          </html>
+        `;
+
+        const blob = new Blob([excelHtml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', `Bao-cao-ton-kho-${dateStr}.xls`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+        showNotice(`Đã xuất báo cáo ${filteredDevices.length} thiết bị ra file Excel có định dạng chuyên nghiệp (.xls)!`, 'success');
+        return;
+      }
+
+      // Xuất định dạng CSV
       const headers = [
+        'STT',
         'Mã quản lý',
         'Tên Model',
         'Hãng sản xuất',
@@ -1154,7 +1381,7 @@ export default function HomePage() {
         'Mã phiếu xuất',
       ];
 
-      const rows = filteredDevices.map((dev) => {
+      const rows = filteredDevices.map((dev, idx) => {
         const inDate = dev.inbound_date || dev.inbound_receipt?.received_date || dev.created_at;
         const outStatus = dev.outbound_date
           ? 'Đã xuất kho'
@@ -1166,8 +1393,8 @@ export default function HomePage() {
             ? 'Kho nội bộ'
             : dev.holder_type === 'SUPPLIER_WARRANTY'
             ? 'TTBH Nhà cung cấp'
-            : (dev.holder_party?.name || 'Bên ngoài');
-        const owner = dev.owner_type === 'INTERNAL' ? 'Nội bộ' : (dev.owner_party?.name || 'Khách');
+            : dev.holder_party?.name || 'Bên ngoài';
+        const owner = dev.owner_type === 'INTERNAL' ? 'Nội bộ' : dev.owner_party?.name || 'Khách';
         const cond =
           dev.technical_condition === 'USABLE'
             ? 'Sử dụng tốt'
@@ -1176,6 +1403,7 @@ export default function HomePage() {
             : 'Hỏng / Lỗi';
 
         return [
+          String(idx + 1),
           dev.management_code,
           dev.product?.name || '',
           dev.product?.brand || '',
@@ -1210,9 +1438,8 @@ export default function HomePage() {
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      const today = new Date().toISOString().slice(0, 10);
       link.href = url;
-      link.setAttribute('download', `Bao-cao-ton-kho-${today}.csv`);
+      link.setAttribute('download', `Bao-cao-ton-kho-${dateStr}.csv`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -1223,6 +1450,9 @@ export default function HomePage() {
       showNotice(err?.message || 'Lỗi khi xuất file báo cáo', 'error');
     }
   };
+
+  const exportInventoryToCsv = () => exportInventoryReport('excel');
+
 
   if (checkingAuth) {
     return (
@@ -1382,12 +1612,12 @@ export default function HomePage() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <button
-            onClick={exportInventoryToCsv}
+            onClick={() => setExportModalOpen(true)}
             className="btn btn-primary"
             style={{ fontSize: '0.75rem', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }}
-            title="Tải toàn bộ báo cáo tồn kho ra file Excel/CSV về máy"
+            title="Tải báo cáo thiết bị ra file Excel định dạng chuẩn hoặc CSV"
           >
-            📥 Xuất Excel
+            📊 Xuất Excel
           </button>
           <button
             onClick={() => {
@@ -1515,13 +1745,13 @@ export default function HomePage() {
                   <span>Lối tắt Báo cáo & Lọc nhanh Tồn kho:</span>
                 </span>
                 <button
-                  onClick={exportInventoryToCsv}
+                  onClick={() => setExportModalOpen(true)}
                   className="btn btn-primary"
                   style={{ fontSize: '0.75rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  title="Tải ngay báo cáo tồn kho dạng file Excel/CSV về máy tính"
+                  title="Tải ngay báo cáo thiết bị ra file Excel định dạng chuẩn hoặc CSV"
                 >
-                  <span>📥</span>
-                  <span>Xuất Excel/CSV</span>
+                  <span>📊</span>
+                  <span>Xuất Excel</span>
                 </button>
               </div>
 
@@ -2740,11 +2970,11 @@ export default function HomePage() {
                   <button
                     className="btn btn-primary"
                     style={{ padding: '6px 12px', minHeight: 32, fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: 5 }}
-                    onClick={exportInventoryToCsv}
-                    title="Tải toàn bộ danh sách tồn kho ra file Excel/CSV về máy tính"
+                    onClick={() => setExportModalOpen(true)}
+                    title="Tải toàn bộ danh sách tồn kho ra file Excel định dạng chuẩn hoặc CSV"
                   >
-                    <span>📥</span>
-                    <span>Xuất Excel/CSV</span>
+                    <span>📊</span>
+                    <span>Xuất Excel</span>
                   </button>
                   <button
                     className="btn btn-secondary"
@@ -4396,6 +4626,169 @@ export default function HomePage() {
           </div>
         </div>
       )}
+      {/* Modal Xuất Báo Cáo Tồn Kho Excel & CSV */}
+      {exportModalOpen && (
+        <div className="modal-overlay" onClick={() => setExportModalOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 540 }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>📊</span>
+                  <span>Xuất Báo Cáo Thiết Bị & Tồn Kho</span>
+                </h3>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                  Tải dữ liệu danh sách thiết bị về máy tính với định dạng rõ ràng, chuyên nghiệp
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExportModalOpen(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  lineHeight: 1,
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Thông tin phạm vi trích xuất */}
+            <div
+              style={{
+                background: 'rgba(59, 130, 246, 0.08)',
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid rgba(59, 130, 246, 0.22)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                marginTop: 6,
+              }}
+            >
+              <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#93c5fd', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>🎯</span>
+                <span>Phạm vi dữ liệu đang lọc:</span>
+              </div>
+              <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#f8fafc' }}>
+                {inventoryFilter === 'ALL' && 'Tất cả thiết bị'}
+                {inventoryFilter === 'STORAGE' && 'Chỉ thiết bị trong kho (Sẵn sàng)'}
+                {inventoryFilter === 'EXPORTED' && 'Chỉ thiết bị đã xuất kho'}
+                {inventoryFilter === 'THIS_MONTH' && 'Chỉ thiết bị mới nhập trong tháng này'}
+                {inventoryFilter === 'EXTERNAL' && 'Chỉ thiết bị bên ngoài (Khách / Mượn)'}
+                {inventoryFilter === 'WARRANTY' && 'Chỉ thiết bị tại TTBH Nhà cung cấp'}
+                {inventoryFilter === 'NEEDS_INSPECTION' && 'Chỉ thiết bị cần kiểm tra / Lỗi'}
+              </div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <span>Tổng: <strong style={{ color: '#f8fafc' }}>{groupedInventoryModels.flatMap(g => g.items).length}</strong> thiết bị</span>
+                <span>• Trong kho: <strong style={{ color: '#86efac' }}>{groupedInventoryModels.flatMap(g => g.items).filter(d => !d.outbound_date).length}</strong></span>
+                <span>• Đã xuất: <strong style={{ color: '#c084fc' }}>{groupedInventoryModels.flatMap(g => g.items).filter(d => !!d.outbound_date).length}</strong></span>
+              </div>
+            </div>
+
+            {/* 2 Lựa chọn định dạng xuất */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
+              <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                Chọn định dạng file tải xuống:
+              </div>
+
+              {/* Lựa chọn 1: Excel chuyên nghiệp */}
+              <div
+                onClick={() => {
+                  exportInventoryReport('excel');
+                  setExportModalOpen(false);
+                }}
+                style={{
+                  background: 'var(--bg-input)',
+                  padding: '14px 16px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1.5px solid var(--primary)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                <div style={{ fontSize: '2.2rem', lineHeight: 1 }}>📊</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>Microsoft Excel (.xls)</span>
+                    <span style={{ fontSize: '0.68rem', padding: '2px 6px', borderRadius: 4, background: 'rgba(34, 197, 94, 0.18)', color: 'var(--success)', fontWeight: 600 }}>
+                      Khuyên dùng
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 }}>
+                    ✓ Có tiêu đề báo cáo, viền khung bảng sắc nét, màu sắc phân loại trạng thái.<br/>
+                    ✓ Định dạng chuẩn cột <strong>Ngày nhập / Ngày xuất kho</strong>.<br/>
+                    ✓ Cột <strong>Serial Number</strong> giữ nguyên chuỗi text (không bị biến thành số mũ).<br/>
+                    ✓ Có dòng tổng kết thống kê ở chân bảng.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ padding: '6px 12px', fontSize: '0.78rem', flexShrink: 0 }}
+                >
+                  Tải Excel
+                </button>
+              </div>
+
+              {/* Lựa chọn 2: CSV tiêu chuẩn */}
+              <div
+                onClick={() => {
+                  exportInventoryReport('csv');
+                  setExportModalOpen(false);
+                }}
+                style={{
+                  background: 'var(--bg-input)',
+                  padding: '12px 16px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-color)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                <div style={{ fontSize: '1.8rem', lineHeight: 1 }}>📄</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                    File CSV Tiêu chuẩn (.csv)
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                    Dữ liệu phân tách dấu phẩy chuẩn UTF-8 có BOM (phù hợp nhập vào các phần mềm khác).
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '0.78rem', flexShrink: 0 }}
+                >
+                  Tải CSV
+                </button>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setExportModalOpen(false)}
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
