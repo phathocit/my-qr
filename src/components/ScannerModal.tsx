@@ -75,10 +75,17 @@ async function getOrPreloadWasm() {
         },
       });
     }
-    // Chạy thử 1 buffer rỗng nhỏ để JIT engine WebAssembly biên dịch trước
+    // Chạy thử 1 buffer để JIT engine WebAssembly biên dịch trước toàn bộ bảng giải mã
     try {
-      const dummy = new ImageData(1, 1);
-      await zxing.readBarcodesFromImageData(dummy);
+      const dummy = new ImageData(10, 10);
+      await zxing.readBarcodesFromImageData(dummy, {
+        formats: ['Code128', 'Code39', 'EAN-13', 'QRCode', 'UPC-A', 'ITF', 'Codabar'],
+        tryHarder: true,
+        tryRotate: true,
+        tryInvert: true,
+        tryDownscale: true,
+        binarizer: 'LocalAverage',
+      });
     } catch {}
     cachedZxingReader = zxing.readBarcodesFromImageData;
     cachedReadBarcodes = zxing.readBarcodes;
@@ -336,54 +343,51 @@ export default function ScannerModal({
             }
           }
 
-          // ── BƯỚC 2: FALLBACK SANG ZXING C++ WASM TURBO (Cắt trọng tâm 480px) ─
+          // ── BƯỚC 2: FALLBACK SANG ZXING C++ WASM TURBO (1:1 PIXEL GỐC, KHÔNG DOWNSCALE) ─
           const vw = video.videoWidth;
           const vh = video.videoHeight;
           if (vw > 0 && vh > 0 && readBarcodesFromImageData) {
             frameCounter++;
 
-            // DUAL-PASS SCANNING:
-            // Pass 1: Cắt trọng tâm (Center crop 72% width, 50% height) -> Độ phân giải tối ưu 480px
-            // Pass 2: Quét toàn cảnh 520px
+            // QUÉT NGUYÊN BẢN 1:1 PIXEL (BẢO TOÀN TUYỆT ĐỐI CÁC ĐƯỜNG KẺ MÃ VẠCH 1PX):
+            // Pass 1: Cắt trọng tâm 75% rộng x 55% cao ở độ phân giải 1:1 gốc của cảm biến
+            // Pass 2: Quét toàn cảnh cảm biến gốc
             const isCenterCropPass = frameCounter % 2 === 0;
 
-            let targetW: number;
-            let targetH: number;
-
             if (isCenterCropPass) {
-              const cropX = Math.round(vw * 0.14);
-              const cropY = Math.round(vh * 0.25);
-              const cropW = Math.round(vw * 0.72);
-              const cropH = Math.round(vh * 0.5);
+              const cropW = Math.round(vw * 0.75);
+              const cropH = Math.round(vh * 0.55);
+              const cropX = Math.round((vw - cropW) / 2);
+              const cropY = Math.round((vh - cropH) / 2);
 
-              targetW = 480;
-              targetH = Math.round((cropH / cropW) * targetW);
-
-              if (canvas.width !== targetW || canvas.height !== targetH) {
-                canvas.width = targetW;
-                canvas.height = targetH;
+              if (canvas.width !== cropW || canvas.height !== cropH) {
+                canvas.width = cropW;
+                canvas.height = cropH;
               }
-              ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH);
+              ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
             } else {
-              targetW = 520;
-              targetH = Math.round((vh / vw) * targetW);
-
-              if (canvas.width !== targetW || canvas.height !== targetH) {
-                canvas.width = targetW;
-                canvas.height = targetH;
+              if (canvas.width !== vw || canvas.height !== vh) {
+                canvas.width = vw;
+                canvas.height = vh;
               }
-              ctx.drawImage(video, 0, 0, targetW, targetH);
+              ctx.drawImage(video, 0, 0, vw, vh);
             }
 
-            const imageData = ctx.getImageData(0, 0, targetW, targetH);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-            const isDeepScan = frameCounter % 4 === 0;
+            // BẬT TOÀN DIỆN MỌI CỜ TRÊN MỌI FRAME (Tốc độ C++ WASM cực nhanh chỉ 3-8ms):
+            // - tryHarder: true (tìm kiếm đa tỷ lệ)
+            // - tryRotate: true (nhận diện cả góc nghiêng 45° hay dọc/ngang)
+            // - tryInvert: true (nhận diện tem bạc phản quang / tem đen trắng)
+            // - tryDownscale: true (thuật toán lọc vạch C++ nội bộ)
+            // - binarizer: 'LocalAverage' (xử lý bóng mờ, chói sáng môi trường văn phòng)
             const results = await readBarcodesFromImageData(imageData, {
-              formats: ['Code128', 'EAN-13', 'QRCode', 'Code39'],
-              tryHarder: isDeepScan,
-              tryRotate: isDeepScan,
-              tryInvert: isDeepScan,
-              binarizer: isDeepScan ? 'LocalAverage' : 'GlobalHistogram',
+              formats: ['Code128', 'Code39', 'EAN-13', 'QRCode', 'UPC-A', 'ITF', 'Codabar'],
+              tryHarder: true,
+              tryRotate: true,
+              tryInvert: true,
+              tryDownscale: true,
+              binarizer: 'LocalAverage',
               maxNumberOfSymbols: 1,
             });
 
@@ -853,9 +857,9 @@ export default function ScannerModal({
                     maxWidth: '92%',
                   }}
                 >
-                  {scanIdleSeconds < 3 && '🎯 Đưa mã vạch vào khung (khoảng cách 15-20cm)'}
-                  {scanIdleSeconds >= 3 && scanIdleSeconds < 6 && '💡 Chưa đọc được? Hãy đưa gần hơn 15-20cm & giữ chắc tay'}
-                  {scanIdleSeconds >= 6 && '⚡ Tem mờ/lóa? Thử bật đèn flash hoặc bấm [📷 Chụp ảnh] để lấy nét'}
+                  {scanIdleSeconds < 3 && '🎯 Giữ cách tem 20-30cm (đừng để sát camera bị mờ) • Bấm [🔍 2x] nếu tem nhỏ'}
+                  {scanIdleSeconds >= 3 && scanIdleSeconds < 6 && '💡 Thử bấm nút [🔍 2x] ở góc phải để phóng to mã vạch siêu nét'}
+                  {scanIdleSeconds >= 6 && '⚡ Tem bóng/lóa? Nghiêng nhẹ máy hoặc bấm [📷 Chụp ảnh bằng máy]'}
                 </div>
               </div>
             )}
