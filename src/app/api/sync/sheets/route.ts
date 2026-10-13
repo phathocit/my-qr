@@ -167,7 +167,7 @@ export async function POST(req: Request) {
         .from('warranty_cases')
         .select(`
           *,
-          device:devices(*),
+          device:devices!warranty_cases_device_id_fkey(*),
           customer:parties!customer_id(*)
         `)
         .order('created_at', { ascending: false });
@@ -350,7 +350,7 @@ export async function POST(req: Request) {
             .from('warranty_cases')
             .select(`
               *,
-              device:devices(*)
+              device:devices!warranty_cases_device_id_fkey(*)
             `)
             .eq('id', job.entity_id)
             .single();
