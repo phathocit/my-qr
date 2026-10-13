@@ -101,6 +101,28 @@ export default function HomePage() {
   const [newPartyPhone, setNewPartyPhone] = useState('');
   const [newPartyEmail, setNewPartyEmail] = useState('');
 
+  // Edit Warranty Modal State
+  const [editWarrantyModalOpen, setEditWarrantyModalOpen] = useState(false);
+  const [editWarrantyDevice, setEditWarrantyDevice] = useState<Device | null>(null);
+  const [editSupplierHasWarranty, setEditSupplierHasWarranty] = useState(true);
+  const [editSupplierStartDate, setEditSupplierStartDate] = useState('');
+  const [editSupplierEndDate, setEditSupplierEndDate] = useState('');
+  const [editSupplierNotes, setEditSupplierNotes] = useState('');
+  const [editCustomerHasWarranty, setEditCustomerHasWarranty] = useState(false);
+  const [editCustomerStartDate, setEditCustomerStartDate] = useState('');
+  const [editCustomerEndDate, setEditCustomerEndDate] = useState('');
+  const [editCustomerNotes, setEditCustomerNotes] = useState('');
+
+  // Inbound Warranty Policy State
+  const [inboundHasWarranty, setInboundHasWarranty] = useState(true);
+  const [inboundWarrantyMonths, setInboundWarrantyMonths] = useState<number>(12);
+  const [inboundWarrantyNotes, setInboundWarrantyNotes] = useState('Chính hãng NCC');
+
+  // Outbound Warranty Policy State
+  const [outboundHasWarranty, setOutboundHasWarranty] = useState(true);
+  const [outboundWarrantyMonths, setOutboundWarrantyMonths] = useState<number>(12);
+  const [outboundWarrantyNotes, setOutboundWarrantyNotes] = useState('Bảo hành tiêu chuẩn công ty');
+
   // Initial Load
   const refreshData = async () => {
     setIsMock(inventoryService.isUsingMock());
@@ -364,6 +386,90 @@ export default function HomePage() {
     }
   };
 
+  // --- WARRANTY POLICY HELPERS & HANDLERS ---
+  const addMonthsToDate = (baseDateStr: string, months: number): string => {
+    const d = baseDateStr ? new Date(baseDateStr) : new Date();
+    d.setMonth(d.getMonth() + months);
+    return d.toISOString().slice(0, 10);
+  };
+
+  const openEditWarrantyModal = (dev: Device) => {
+    setEditWarrantyDevice(dev);
+    setEditSupplierHasWarranty(dev.supplier_warranty?.has_warranty ?? true);
+    setEditSupplierStartDate(dev.supplier_warranty?.start_date || new Date().toISOString().slice(0, 10));
+    setEditSupplierEndDate(dev.supplier_warranty?.end_date || '');
+    setEditSupplierNotes(dev.supplier_warranty?.terms_note || 'Bảo hành chính hãng NCC');
+
+    setEditCustomerHasWarranty(dev.customer_warranty?.has_warranty ?? (dev.owner_type === 'EXTERNAL'));
+    setEditCustomerStartDate(dev.customer_warranty?.start_date || new Date().toISOString().slice(0, 10));
+    setEditCustomerEndDate(dev.customer_warranty?.end_date || '');
+    setEditCustomerNotes(dev.customer_warranty?.terms_note || 'Bảo hành tiêu chuẩn');
+
+    setEditWarrantyModalOpen(true);
+  };
+
+  const handleSaveWarrantyPolicy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editWarrantyDevice) return;
+    setLoading(true);
+    try {
+      const res = await inventoryService.updateWarrantyPolicy({
+        device_id: editWarrantyDevice.id,
+        supplier_warranty: {
+          has_warranty: editSupplierHasWarranty,
+          start_date: editSupplierStartDate || undefined,
+          end_date: editSupplierEndDate || undefined,
+          terms_note: editSupplierNotes || undefined,
+        },
+        customer_warranty: {
+          has_warranty: editCustomerHasWarranty,
+          start_date: editCustomerStartDate || undefined,
+          end_date: editCustomerEndDate || undefined,
+          terms_note: editCustomerNotes || undefined,
+        },
+      });
+      showNotice(res.message, 'success');
+      setEditWarrantyModalOpen(false);
+      await refreshData();
+      if (selectedDevice && selectedDevice.id === editWarrantyDevice.id) {
+        setSelectedDevice((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            supplier_warranty: {
+              id: prev.supplier_warranty?.id || `w-sup-${Date.now()}`,
+              device_id: prev.id,
+              policy_type: 'SUPPLIER_POLICY',
+              source_event_type: 'MANUAL_OVERRIDE',
+              source_event_id: prev.id,
+              has_warranty: editSupplierHasWarranty,
+              start_date: editSupplierStartDate || null,
+              end_date: editSupplierEndDate || null,
+              terms_note: editSupplierNotes || null,
+              created_at: prev.supplier_warranty?.created_at || new Date().toISOString(),
+            },
+            customer_warranty: {
+              id: prev.customer_warranty?.id || `w-cus-${Date.now()}`,
+              device_id: prev.id,
+              policy_type: 'CUSTOMER_POLICY',
+              source_event_type: 'MANUAL_OVERRIDE',
+              source_event_id: prev.id,
+              has_warranty: editCustomerHasWarranty,
+              start_date: editCustomerStartDate || null,
+              end_date: editCustomerEndDate || null,
+              terms_note: editCustomerNotes || null,
+              created_at: prev.customer_warranty?.created_at || new Date().toISOString(),
+            },
+          };
+        });
+      }
+    } catch (err: any) {
+      showNotice(err.message || 'Lỗi khi cập nhật chính sách bảo hành', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // --- CONFIRM INBOUND ---
   const handleConfirmInbound = async () => {
     if (!inboundSupplierId) {
@@ -377,6 +483,16 @@ export default function HomePage() {
 
     setLoading(true);
     try {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const supplierWarrantyPayload = inboundHasWarranty
+        ? {
+            has_warranty: true,
+            start_date: todayStr,
+            end_date: inboundWarrantyMonths > 0 ? addMonthsToDate(todayStr, inboundWarrantyMonths) : undefined,
+            terms_note: inboundWarrantyNotes || undefined,
+          }
+        : undefined;
+
       const res = await inventoryService.confirmInboundReceipt({
         supplier_id: inboundSupplierId,
         items: inboundItems.map((item) => ({
@@ -385,6 +501,7 @@ export default function HomePage() {
           serial_number: item.serial_number,
           technical_condition: item.technical_condition,
           photo: item.photo,
+          supplier_warranty: supplierWarrantyPayload,
         })),
       });
       showNotice(res.message, 'success');
@@ -422,10 +539,22 @@ export default function HomePage() {
         }
         showNotice('Đã bàn giao cho mượn thành công', 'success');
       } else {
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const customerWarrantyPayload =
+          ['SALE_INDIVIDUAL', 'SALE_ORG', 'GIVE_PERMANENT'].includes(outboundType) && outboundHasWarranty
+            ? {
+                has_warranty: true,
+                start_date: todayStr,
+                end_date: outboundWarrantyMonths > 0 ? addMonthsToDate(todayStr, outboundWarrantyMonths) : undefined,
+                terms_note: outboundWarrantyNotes || undefined,
+              }
+            : undefined;
+
         const res = await inventoryService.confirmOutboundReceipt({
           recipient_id: outboundRecipientId,
           outbound_type: outboundType as any,
           device_ids: outboundSelectedDevIds,
+          customer_warranty: customerWarrantyPayload,
         });
         showNotice(res.message, 'success');
       }
@@ -993,12 +1122,22 @@ export default function HomePage() {
 
                 {/* 2 Warranty Policies */}
                 <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Chính sách bảo hành 2 phía:</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Chính sách bảo hành 2 phía:</div>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ padding: '3px 8px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                      onClick={() => openEditWarrantyModal(selectedDevice)}
+                    >
+                      ✏️ Điền / Cập nhật
+                    </button>
+                  </div>
                   <div style={{ fontSize: '0.8rem' }}>
                     🏭 <strong>BH Nhà cung cấp:</strong>{' '}
                     {selectedDevice.supplier_warranty?.has_warranty ? (
-                      <span style={{ color: 'var(--success)' }}>
-                        Đến {selectedDevice.supplier_warranty.end_date || 'Không thời hạn'} ({selectedDevice.supplier_warranty.terms_note || 'Theo NCC'})
+                      <span style={{ color: 'var(--success)', fontWeight: 500 }}>
+                        Đến {selectedDevice.supplier_warranty.end_date || 'Không thời hạn'} {selectedDevice.supplier_warranty.terms_note ? `(${selectedDevice.supplier_warranty.terms_note})` : ''}
                       </span>
                     ) : (
                       <span style={{ color: 'var(--text-muted)' }}>Chưa có thông tin</span>
@@ -1007,8 +1146,8 @@ export default function HomePage() {
                   <div style={{ fontSize: '0.8rem' }}>
                     🤝 <strong>BH Khách hàng:</strong>{' '}
                     {selectedDevice.customer_warranty?.has_warranty ? (
-                      <span style={{ color: 'var(--success)' }}>
-                        Đến {selectedDevice.customer_warranty.end_date || 'Không thời hạn'}
+                      <span style={{ color: 'var(--success)', fontWeight: 500 }}>
+                        Đến {selectedDevice.customer_warranty.end_date || 'Không thời hạn'} {selectedDevice.customer_warranty.terms_note ? `(${selectedDevice.customer_warranty.terms_note})` : ''}
                       </span>
                     ) : (
                       <span style={{ color: 'var(--text-muted)' }}>Chưa có thông tin</span>
@@ -1201,6 +1340,56 @@ export default function HomePage() {
                   <option value="USABLE">Hàng chuẩn / Sẵn sàng sử dụng (USABLE)</option>
                   <option value="NEEDS_INSPECTION">Hàng lỗi / Cần kiểm tra lại (NEEDS_INSPECTION)</option>
                 </select>
+              </div>
+
+              {/* Chính sách bảo hành NCC cho phiếu nhập */}
+              <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, margin: 0, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={inboundHasWarranty}
+                      onChange={(e) => setInboundHasWarranty(e.target.checked)}
+                      style={{ width: 16, height: 16, accentColor: 'var(--primary)' }}
+                    />
+                    <span>🏭 Có bảo hành từ Nhà cung cấp</span>
+                  </label>
+                  {inboundHasWarranty && (
+                    <span style={{ fontSize: '0.75rem', color: 'var(--success)', fontWeight: 600 }}>Tự động áp dụng cho lô nhập</span>
+                  )}
+                </div>
+
+                {inboundHasWarranty && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Thời hạn BH (tháng):</label>
+                      <select
+                        className="select"
+                        value={inboundWarrantyMonths}
+                        onChange={(e) => setInboundWarrantyMonths(Number(e.target.value))}
+                        style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                      >
+                        <option value={0}>Không thời hạn</option>
+                        <option value={3}>3 tháng</option>
+                        <option value={6}>6 tháng</option>
+                        <option value={12}>12 tháng (1 năm)</option>
+                        <option value={24}>24 tháng (2 năm)</option>
+                        <option value={36}>36 tháng (3 năm)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ghi chú / Điều khoản NCC:</label>
+                      <input
+                        type="text"
+                        className="input"
+                        value={inboundWarrantyNotes}
+                        onChange={(e) => setInboundWarrantyNotes(e.target.value)}
+                        placeholder="VD: Chính hãng NCC"
+                        style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons: Scan continuously or Generate code */}
@@ -1432,6 +1621,59 @@ export default function HomePage() {
                     value={outboundReturnDate}
                     onChange={(e) => setOutboundReturnDate(e.target.value)}
                   />
+                </div>
+              )}
+
+              {/* Chính sách bảo hành Khách hàng khi xuất bán / cấp */}
+              {['SALE_INDIVIDUAL', 'SALE_ORG', 'GIVE_PERMANENT'].includes(outboundType) && (
+                <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, margin: 0, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={outboundHasWarranty}
+                        onChange={(e) => setOutboundHasWarranty(e.target.checked)}
+                        style={{ width: 16, height: 16, accentColor: 'var(--primary)' }}
+                      />
+                      <span>🤝 Cam kết bảo hành cho khách hàng</span>
+                    </label>
+                    {outboundHasWarranty && (
+                      <span style={{ fontSize: '0.75rem', color: 'var(--success)', fontWeight: 600 }}>Tự động kích hoạt khi xuất</span>
+                    )}
+                  </div>
+
+                  {outboundHasWarranty && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Thời hạn BH (tháng):</label>
+                        <select
+                          className="select"
+                          value={outboundWarrantyMonths}
+                          onChange={(e) => setOutboundWarrantyMonths(Number(e.target.value))}
+                          style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                        >
+                          <option value={0}>Không thời hạn</option>
+                          <option value={1}>1 tháng</option>
+                          <option value={3}>3 tháng</option>
+                          <option value={6}>6 tháng</option>
+                          <option value={12}>12 tháng (1 năm)</option>
+                          <option value={24}>24 tháng (2 năm)</option>
+                          <option value={36}>36 tháng (3 năm)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ghi chú / Tiêu chuẩn BH:</label>
+                        <input
+                          type="text"
+                          className="input"
+                          value={outboundWarrantyNotes}
+                          onChange={(e) => setOutboundWarrantyNotes(e.target.value)}
+                          placeholder="VD: Bảo hành 1 đổi 1 trong 30 ngày"
+                          style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -2443,6 +2685,264 @@ export default function HomePage() {
                 </button>
                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={loading}>
                   {loading ? 'Đang lưu...' : 'Lưu đối tác'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Warranty Policy Modal */}
+      {editWarrantyModalOpen && editWarrantyDevice && (
+        <div className="modal-overlay" onClick={() => setEditWarrantyModalOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 540 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>Cập nhật chính sách bảo hành 2 phía</h3>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                  Mã thiết bị: <strong style={{ color: 'var(--text-main)' }}>{editWarrantyDevice.management_code}</strong>
+                  {editWarrantyDevice.serial_number ? ` (SN: ${editWarrantyDevice.serial_number})` : ''}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditWarrantyModalOpen(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  lineHeight: 1,
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveWarrantyPolicy} style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 4 }}>
+              {/* 1. BH Nhà cung cấp */}
+              <div
+                style={{
+                  background: 'var(--bg-input)',
+                  padding: 14,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-color)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <label style={{ fontSize: '0.9rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8, margin: 0, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={editSupplierHasWarranty}
+                      onChange={(e) => setEditSupplierHasWarranty(e.target.checked)}
+                      style={{ width: 16, height: 16, accentColor: 'var(--primary)' }}
+                    />
+                    <span>🏭 Bảo hành Nhà cung cấp (Đầu vào)</span>
+                  </label>
+                  <span style={{ fontSize: '0.75rem', color: editSupplierHasWarranty ? 'var(--success)' : 'var(--text-muted)', fontWeight: 600 }}>
+                    {editSupplierHasWarranty ? 'Đang kích hoạt' : 'Không có BH'}
+                  </span>
+                </div>
+
+                {editSupplierHasWarranty && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ngày bắt đầu:</label>
+                        <input
+                          type="date"
+                          className="input"
+                          value={editSupplierStartDate}
+                          onChange={(e) => setEditSupplierStartDate(e.target.value)}
+                          style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                        />
+                      </div>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ngày kết thúc:</label>
+                        <input
+                          type="date"
+                          className="input"
+                          value={editSupplierEndDate}
+                          onChange={(e) => setEditSupplierEndDate(e.target.value)}
+                          style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Gợi ý hạn:</span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                        onClick={() => setEditSupplierEndDate(addMonthsToDate(editSupplierStartDate, 12))}
+                      >
+                        +12 tháng
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                        onClick={() => setEditSupplierEndDate(addMonthsToDate(editSupplierStartDate, 24))}
+                      >
+                        +24 tháng
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                        onClick={() => setEditSupplierEndDate(addMonthsToDate(editSupplierStartDate, 36))}
+                      >
+                        +36 tháng
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                        onClick={() => setEditSupplierEndDate('')}
+                      >
+                        Không hạn
+                      </button>
+                    </div>
+
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Điều khoản / Ghi chú NCC:</label>
+                      <input
+                        type="text"
+                        className="input"
+                        placeholder="VD: Chính hãng Lenovo 36 tháng"
+                        value={editSupplierNotes}
+                        onChange={(e) => setEditSupplierNotes(e.target.value)}
+                        style={{ padding: '6px 10px', fontSize: '0.85rem' }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 2. BH Khách hàng */}
+              <div
+                style={{
+                  background: 'var(--bg-input)',
+                  padding: 14,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-color)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <label style={{ fontSize: '0.9rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8, margin: 0, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={editCustomerHasWarranty}
+                      onChange={(e) => setEditCustomerHasWarranty(e.target.checked)}
+                      style={{ width: 16, height: 16, accentColor: 'var(--primary)' }}
+                    />
+                    <span>🤝 Bảo hành Khách hàng (Đầu ra)</span>
+                  </label>
+                  <span style={{ fontSize: '0.75rem', color: editCustomerHasWarranty ? 'var(--success)' : 'var(--text-muted)', fontWeight: 600 }}>
+                    {editCustomerHasWarranty ? 'Đang kích hoạt' : 'Không có BH'}
+                  </span>
+                </div>
+
+                {editCustomerHasWarranty && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ngày bắt đầu:</label>
+                        <input
+                          type="date"
+                          className="input"
+                          value={editCustomerStartDate}
+                          onChange={(e) => setEditCustomerStartDate(e.target.value)}
+                          style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                        />
+                      </div>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Ngày kết thúc:</label>
+                        <input
+                          type="date"
+                          className="input"
+                          value={editCustomerEndDate}
+                          onChange={(e) => setEditCustomerEndDate(e.target.value)}
+                          style={{ padding: '6px 8px', fontSize: '0.85rem' }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Gợi ý hạn:</span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                        onClick={() => setEditCustomerEndDate(addMonthsToDate(editCustomerStartDate, 6))}
+                      >
+                        +6 tháng
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                        onClick={() => setEditCustomerEndDate(addMonthsToDate(editCustomerStartDate, 12))}
+                      >
+                        +12 tháng
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                        onClick={() => setEditCustomerEndDate(addMonthsToDate(editCustomerStartDate, 24))}
+                      >
+                        +24 tháng
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                        onClick={() => setEditCustomerEndDate('')}
+                      >
+                        Không hạn
+                      </button>
+                    </div>
+
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: 4 }}>Điều khoản / Cam kết với khách:</label>
+                      <input
+                        type="text"
+                        className="input"
+                        placeholder="VD: 1 đổi 1 trong 30 ngày, BH tiêu chuẩn công ty"
+                        value={editCustomerNotes}
+                        onChange={(e) => setEditCustomerNotes(e.target.value)}
+                        style={{ padding: '6px 10px', fontSize: '0.85rem' }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ flex: 1 }}
+                  onClick={() => setEditWarrantyModalOpen(false)}
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ flex: 1 }}
+                  disabled={loading}
+                >
+                  {loading ? 'Đang lưu...' : '💾 Lưu chính sách bảo hành'}
                 </button>
               </div>
             </form>

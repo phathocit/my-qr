@@ -486,6 +486,21 @@ class InventoryService {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         photo_url: item.photo || null,
+        supplier_warranty: item.supplier_warranty
+          ? {
+              id: `sw-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+              device_id: newDevId,
+              policy_type: 'SUPPLIER_POLICY',
+              source_event_type: 'INBOUND',
+              source_event_id: 'mock-rec',
+              has_warranty: item.supplier_warranty.has_warranty,
+              start_date: item.supplier_warranty.start_date || new Date().toISOString().slice(0, 10),
+              end_date: item.supplier_warranty.end_date,
+              terms_note: item.supplier_warranty.terms_note,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            }
+          : null,
         evidence_photos: item.photo
           ? [
               {
@@ -557,6 +572,22 @@ class InventoryService {
         dev.holder_type = 'EXTERNAL_PARTY';
         dev.holder_party_id = data.recipient_id;
         dev.holder_party = recipient;
+
+        if (data.customer_warranty && data.customer_warranty.has_warranty) {
+          dev.customer_warranty = {
+            id: `cw-${Date.now()}-${dev.id}`,
+            device_id: dev.id,
+            policy_type: 'CUSTOMER_POLICY',
+            source_event_type: 'OUTBOUND_SALE',
+            source_event_id: 'mock-px',
+            has_warranty: true,
+            start_date: data.customer_warranty.start_date || new Date().toISOString().slice(0, 10),
+            end_date: data.customer_warranty.end_date,
+            terms_note: data.customer_warranty.terms_note,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+        }
       } else if (data.outbound_type === 'RETURN_SUPPLIER') {
         dev.lifecycle = 'RETURNED_SUPPLIER';
         dev.holder_type = 'EXTERNAL_PARTY';
@@ -884,6 +915,135 @@ class InventoryService {
     wc.repair_outcome = (wc.repair_outcome ? wc.repair_outcome + ' ' : '') + `[Đổi SN mới: ${data.new_serial_number || data.new_management_code}]`;
     this.persistMock();
     return { success: true, message: `Đã đổi sang thiết bị mới: ${newDev.management_code}` };
+  }
+
+  // --- CẬP NHẬT CHÍNH SÁCH BẢO HÀNH (NCC & KHÁCH HÀNG) ---
+  async updateWarrantyPolicy(params: {
+    device_id: string;
+    supplier_warranty?: {
+      has_warranty: boolean;
+      start_date?: string;
+      end_date?: string;
+      terms_note?: string;
+    };
+    customer_warranty?: {
+      has_warranty: boolean;
+      start_date?: string;
+      end_date?: string;
+      terms_note?: string;
+    };
+  }): Promise<{ success: boolean; message: string }> {
+    if (isSupabaseConfigured()) {
+      const supabase = createClient();
+
+      if (params.supplier_warranty) {
+        const { data: existing } = await supabase
+          .from('warranty_policies')
+          .select('id')
+          .eq('device_id', params.device_id)
+          .eq('policy_type', 'SUPPLIER_POLICY')
+          .maybeSingle();
+
+        if (existing) {
+          await supabase
+            .from('warranty_policies')
+            .update({
+              has_warranty: params.supplier_warranty.has_warranty,
+              start_date: params.supplier_warranty.start_date || null,
+              end_date: params.supplier_warranty.end_date || null,
+              terms_note: params.supplier_warranty.terms_note || null,
+              source_event_type: 'MANUAL_OVERRIDE',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', existing.id);
+        } else {
+          await supabase.from('warranty_policies').insert({
+            device_id: params.device_id,
+            policy_type: 'SUPPLIER_POLICY',
+            source_event_type: 'MANUAL_OVERRIDE',
+            source_event_id: params.device_id,
+            has_warranty: params.supplier_warranty.has_warranty,
+            start_date: params.supplier_warranty.start_date || null,
+            end_date: params.supplier_warranty.end_date || null,
+            terms_note: params.supplier_warranty.terms_note || null,
+          });
+        }
+      }
+
+      if (params.customer_warranty) {
+        const { data: existing } = await supabase
+          .from('warranty_policies')
+          .select('id')
+          .eq('device_id', params.device_id)
+          .eq('policy_type', 'CUSTOMER_POLICY')
+          .maybeSingle();
+
+        if (existing) {
+          await supabase
+            .from('warranty_policies')
+            .update({
+              has_warranty: params.customer_warranty.has_warranty,
+              start_date: params.customer_warranty.start_date || null,
+              end_date: params.customer_warranty.end_date || null,
+              terms_note: params.customer_warranty.terms_note || null,
+              source_event_type: 'MANUAL_OVERRIDE',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', existing.id);
+        } else {
+          await supabase.from('warranty_policies').insert({
+            device_id: params.device_id,
+            policy_type: 'CUSTOMER_POLICY',
+            source_event_type: 'MANUAL_OVERRIDE',
+            source_event_id: params.device_id,
+            has_warranty: params.customer_warranty.has_warranty,
+            start_date: params.customer_warranty.start_date || null,
+            end_date: params.customer_warranty.end_date || null,
+            terms_note: params.customer_warranty.terms_note || null,
+          });
+        }
+      }
+      return { success: true, message: 'Đã cập nhật chính sách bảo hành thành công' };
+    }
+
+    // Mock Mode
+    const dev = this.devices.find((d) => d.id === params.device_id);
+    if (!dev) throw new Error('Không tìm thấy thiết bị');
+
+    if (params.supplier_warranty) {
+      dev.supplier_warranty = {
+        id: dev.supplier_warranty?.id || `wp-sup-${Date.now()}`,
+        device_id: dev.id,
+        policy_type: 'SUPPLIER_POLICY',
+        source_event_type: 'MANUAL_OVERRIDE',
+        source_event_id: dev.id,
+        has_warranty: params.supplier_warranty.has_warranty,
+        start_date: params.supplier_warranty.start_date,
+        end_date: params.supplier_warranty.end_date,
+        terms_note: params.supplier_warranty.terms_note,
+        created_at: dev.supplier_warranty?.created_at || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    }
+
+    if (params.customer_warranty) {
+      dev.customer_warranty = {
+        id: dev.customer_warranty?.id || `wp-cus-${Date.now()}`,
+        device_id: dev.id,
+        policy_type: 'CUSTOMER_POLICY',
+        source_event_type: 'MANUAL_OVERRIDE',
+        source_event_id: dev.id,
+        has_warranty: params.customer_warranty.has_warranty,
+        start_date: params.customer_warranty.start_date,
+        end_date: params.customer_warranty.end_date,
+        terms_note: params.customer_warranty.terms_note,
+        created_at: dev.customer_warranty?.created_at || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    }
+
+    this.persistMock();
+    return { success: true, message: 'Đã cập nhật chính sách bảo hành thành công' };
   }
 }
 
