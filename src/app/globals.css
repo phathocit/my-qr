@@ -145,13 +145,30 @@ body {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   z-index: 50;
-  padding: 0 4px;
+  padding: 4px;
 }
 
 @media (min-width: 768px) {
   .bottom-nav {
     max-width: 680px;
   }
+}
+
+/* Sliding Active Pill Indicator (Thanh trượt Active) */
+.nav-slider-pill {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 4px;
+  width: calc((100% - 8px) / 5);
+  background: var(--primary-light);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.28);
+  pointer-events: none;
+  z-index: 1;
+  transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
 }
 
 .nav-item {
@@ -164,15 +181,15 @@ body {
   text-decoration: none;
   font-size: 0.7rem;
   font-weight: 600;
-  background: none;
+  background: transparent !important;
   border: none;
   cursor: pointer;
   transition: color var(--duration-fast) var(--ease-spring),
-              transform var(--duration-micro) var(--ease-spring),
-              background-color var(--duration-fast) ease;
+              transform var(--duration-micro) var(--ease-spring);
   position: relative;
   border-radius: var(--radius-sm);
   padding: 4px 2px;
+  z-index: 2;
 }
 
 .nav-item:hover {
@@ -185,12 +202,13 @@ body {
 }
 
 .nav-item.active {
-  color: var(--primary);
+  color: #fff;
+  font-weight: 700;
 }
 
 .nav-item.active svg {
   animation: iconPulse 0.32s var(--ease-spring);
-  filter: drop-shadow(0 2px 8px rgba(59, 130, 246, 0.45));
+  filter: drop-shadow(0 2px 8px rgba(59, 130, 246, 0.5));
 }
 
 .nav-item svg {
@@ -563,6 +581,36 @@ body {
   }
 }
 
+@keyframes tabSlideFromRight {
+  0% {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes tabSlideFromLeft {
+  0% {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.tab-slide-right {
+  animation: tabSlideFromRight 0.28s var(--ease-spring) both;
+}
+
+.tab-slide-left {
+  animation: tabSlideFromLeft 0.28s var(--ease-spring) both;
+}
+
 @keyframes modalOverlayFadeIn {
   0% {
     opacity: 0;
@@ -760,6 +808,13 @@ body {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+[data-theme="glass"] .nav-slider-pill {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.28) 0%, rgba(37, 99, 235, 0.16) 100%);
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  box-shadow: 0 4px 20px rgba(59, 130, 246, 0.35), inset 0 1px 1px rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+}
+
 [data-theme="glass"] .btn-primary {
   background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
   box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
@@ -822,6 +877,13 @@ body {
     border-left: 1px solid #1f2937;
     border-right: 1px solid #1f2937;
   }
+}
+
+[data-theme="dashboard"] .nav-slider-pill {
+  background: rgba(99, 102, 241, 0.22);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.25);
 }
 
 [data-theme="dashboard"] .card {
@@ -902,6 +964,13 @@ body {
   border: 1px solid #3f3f46;
   border-radius: 4px;
   font-family: ui-monospace, monospace;
+}
+
+[data-theme="industrial"] .nav-slider-pill {
+  background: rgba(245, 158, 11, 0.25);
+  border: 1px solid #f59e0b;
+  border-radius: 4px;
+  box-shadow: 0 0 14px rgba(245, 158, 11, 0.4);
 }
 
 /* ═══════════════════════════════════════════════════════════════════ */
@@ -998,15 +1067,34 @@ body {
   }
 }
 
+[data-theme="apple"] .nav-slider-pill {
+  top: 6px;
+  bottom: 6px;
+  left: 8px;
+  width: calc((100% - 16px) / 5);
+  background: rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(25px) saturate(200%);
+  -webkit-backdrop-filter: blur(25px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 28px;
+  box-shadow: inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.45),
+              0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
 [data-theme="apple"] .nav-item {
-  border-radius: 24px;
+  border-radius: 28px;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 [data-theme="apple"] .nav-item.active {
+  color: #ffffff;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+[data-theme="apple"] .nav-item.active svg {
   color: #0a84ff;
-  background: rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.15);
+  filter: drop-shadow(0 2px 10px rgba(10, 132, 255, 0.9));
 }
 
 /* 1:1 Apple VisionOS Buttons (Spring curve & Specular Highlight) */

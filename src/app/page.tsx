@@ -35,8 +35,25 @@ function toDateInputValue(dStr?: string | null): string {
   }
 }
 
+const TAB_INDEX_MAP: Record<Tab, number> = {
+  search: 0,
+  inbound: 1,
+  outbound: 2,
+  warranty: 3,
+  inventory: 4,
+};
+
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<Tab>('search');
+  const [tabDirection, setTabDirection] = useState<'right' | 'left'>('right');
+
+  const handleSwitchTab = (newTab: Tab) => {
+    const currentIdx = TAB_INDEX_MAP[activeTab];
+    const nextIdx = TAB_INDEX_MAP[newTab];
+    setTabDirection(nextIdx >= currentIdx ? 'right' : 'left');
+    setActiveTab(newTab);
+  };
+
   const [isMock, setIsMock] = useState(true);
   const [loading, setLoading] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
@@ -747,7 +764,7 @@ export default function HomePage() {
       showNotice(res.message, 'success');
       setInboundItems([]);
       await refreshData();
-      setActiveTab('inventory');
+      handleSwitchTab('inventory');
       // Tự động kích hoạt đồng bộ Google Sheets chạy ngầm
       fetch('/api/sync/sheets?action=sync_pending', { method: 'POST' }).catch(() => {});
     } catch (err: any) {
@@ -802,7 +819,7 @@ export default function HomePage() {
       }
       setOutboundSelectedDevIds([]);
       await refreshData();
-      setActiveTab('inventory');
+      handleSwitchTab('inventory');
       // Tự động kích hoạt đồng bộ Google Sheets chạy ngầm
       fetch('/api/sync/sheets?action=sync_pending', { method: 'POST' }).catch(() => {});
     } catch (err: any) {
@@ -860,7 +877,7 @@ export default function HomePage() {
       setIntakeFault('');
       setIntakeAccessories('');
       await refreshData();
-      setActiveTab('warranty');
+      handleSwitchTab('warranty');
     } catch (err: any) {
       showNotice(err.message || 'Lỗi khi tiếp nhận bảo hành', 'error');
     } finally {
@@ -1708,7 +1725,7 @@ export default function HomePage() {
       <main className="main-content">
         {/* ================= TAB 1: TRA CỨU & QUÉT ================= */}
         {activeTab === 'search' && (
-          <div className="tab-pane-animated" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div key="search" className={`tab-pane-animated tab-slide-${tabDirection}`} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="card">
               <div className="card-title">
                 <span>Tra cứu nhanh thiết bị</span>
@@ -1763,7 +1780,7 @@ export default function HomePage() {
                   style={{ fontSize: '0.75rem', padding: '4px 9px', display: 'flex', alignItems: 'center', gap: 4 }}
                   onClick={() => {
                     setInventoryFilter('THIS_MONTH');
-                    setActiveTab('inventory');
+                    handleSwitchTab('inventory');
                   }}
                   title="Xem các máy nhập kho trong tháng này"
                 >
@@ -1776,7 +1793,7 @@ export default function HomePage() {
                   style={{ fontSize: '0.75rem', padding: '4px 9px', display: 'flex', alignItems: 'center', gap: 4 }}
                   onClick={() => {
                     setInventoryFilter('STORAGE');
-                    setActiveTab('inventory');
+                    handleSwitchTab('inventory');
                   }}
                   title="Xem các máy còn trong kho chưa xuất"
                 >
@@ -2150,7 +2167,7 @@ export default function HomePage() {
 
         {/* ================= TAB 2: NHẬP KHO ================= */}
         {activeTab === 'inbound' && (
-          <div className="tab-pane-animated" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div key="inbound" className={`tab-pane-animated tab-slide-${tabDirection}`} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="card">
               <div className="card-title">
                 <span>Tạo phiếu nhập từ NCC</span>
@@ -2512,7 +2529,7 @@ export default function HomePage() {
 
         {/* ================= TAB 3: XUẤT KHO & BÀN GIAO ================= */}
         {activeTab === 'outbound' && (
-          <div className="tab-pane-animated" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div key="outbound" className={`tab-pane-animated tab-slide-${tabDirection}`} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="card">
               <div className="card-title">
                 <span>Phiếu xuất kho / Bàn giao</span>
@@ -2760,7 +2777,7 @@ export default function HomePage() {
 
         {/* ================= TAB 4: BẢO HÀNH ================= */}
         {activeTab === 'warranty' && (
-          <div className="tab-pane-animated" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div key="warranty" className={`tab-pane-animated tab-slide-${tabDirection}`} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="card">
               <div className="card-title">
                 <span>Hồ sơ bảo hành 2 phía ({warrantyCases.length})</span>
@@ -2955,7 +2972,7 @@ export default function HomePage() {
 
         {/* ================= TAB 5: TỒN KHO & DANH SÁCH THEO MODEL (ACCORDION) ================= */}
         {activeTab === 'inventory' && (
-          <div className="tab-pane-animated" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div key="inventory" className={`tab-pane-animated tab-slide-${tabDirection}`} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {/* Header tổng quan */}
             <div className="card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
@@ -4517,9 +4534,17 @@ export default function HomePage() {
 
       {/* Bottom Navigation */}
       <nav className="bottom-nav">
+        {/* Sliding Active Pill Indicator (Thanh trượt Active) */}
+        <div
+          className="nav-slider-pill"
+          style={{
+            transform: `translateX(${TAB_INDEX_MAP[activeTab] * 100}%)`,
+          }}
+        />
+
         <button
           className={`nav-item ${activeTab === 'search' ? 'active' : ''}`}
-          onClick={() => setActiveTab('search')}
+          onClick={() => handleSwitchTab('search')}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <circle cx="11" cy="11" r="8" />
@@ -4530,7 +4555,7 @@ export default function HomePage() {
 
         <button
           className={`nav-item ${activeTab === 'inbound' ? 'active' : ''}`}
-          onClick={() => setActiveTab('inbound')}
+          onClick={() => handleSwitchTab('inbound')}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <polyline points="7 10 12 15 17 10" />
@@ -4542,7 +4567,7 @@ export default function HomePage() {
 
         <button
           className={`nav-item ${activeTab === 'outbound' ? 'active' : ''}`}
-          onClick={() => setActiveTab('outbound')}
+          onClick={() => handleSwitchTab('outbound')}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <polyline points="17 14 12 9 7 14" />
@@ -4554,7 +4579,7 @@ export default function HomePage() {
 
         <button
           className={`nav-item ${activeTab === 'warranty' ? 'active' : ''}`}
-          onClick={() => setActiveTab('warranty')}
+          onClick={() => handleSwitchTab('warranty')}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
@@ -4564,7 +4589,7 @@ export default function HomePage() {
 
         <button
           className={`nav-item ${activeTab === 'inventory' ? 'active' : ''}`}
-          onClick={() => setActiveTab('inventory')}
+          onClick={() => handleSwitchTab('inventory')}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
