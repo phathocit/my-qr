@@ -210,6 +210,7 @@ export default function ScannerModal({
   const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
   const [hasZoom, setHasZoom] = useState<boolean>(false);
   const [zoomLevel, setZoomLevel] = useState<number>(1);
+  const [isHardwareZoomActive, setIsHardwareZoomActive] = useState<boolean>(false);
   const [zoomMinMax, setZoomMinMax] = useState<{ min: number; max: number; step: number }>({ min: 1, max: 2, step: 0.1 });
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
   const [currentDeviceIndex, setCurrentDeviceIndex] = useState<number>(0);
@@ -242,6 +243,8 @@ export default function ScannerModal({
   const isHandlingDetectionRef = useRef(false);
   const animationFrameRef = useRef<number | null>(null);
   const lastDetectedCodeRef = useRef<{ code: string; timestamp: number } | null>(null);
+  const zoomLevelRef = useRef<number>(1);
+  const isHardwareZoomActiveRef = useRef<boolean>(false);
 
   // Timers đo lường độc lập
   const scanStartTimestampRef = useRef<number>(0);
@@ -301,6 +304,9 @@ export default function ScannerModal({
     setIsTorchOn(false);
     setHasTorch(false);
     setHasZoom(false);
+    zoomLevelRef.current = 1;
+    isHardwareZoomActiveRef.current = false;
+    setIsHardwareZoomActive(false);
     setZoomLevel(1);
     setContinuousToast(null);
   }, []);
@@ -505,19 +511,42 @@ export default function ScannerModal({
         if (vw > 0 && vh > 0) {
           metricsRef.current.actualResolution = `${vw}x${vh}`;
 
+          const currentZoom = zoomLevelRef.current;
+          const isHwZoom = isHardwareZoomActiveRef.current;
+          const isSoftwareZoom2x = currentZoom > 1 && !isHwZoom;
+
           // ── BƯỚC 1: HARDWARE NATIVE BARCODE DETECTOR (NẾU HỖ TRỢ TRÊN THIẾT BỊ) ──
           if (nativeBarcodeDetector) {
             try {
               const tNativeStart = performance.now();
-              const detections = await nativeBarcodeDetector.detect(video);
+              let detections: any[] = [];
+
+              if (isSoftwareZoom2x) {
+                // Zoom 2x kỹ thuật số: Crop tâm 50% độ nét cao 1:1 cho Native Detector
+                const cropW = Math.round(vw * 0.5);
+                const cropH = Math.round(vh * 0.5);
+                const cropX = Math.round((vw - cropW) / 2);
+                const cropY = Math.round((vh - cropH) / 2);
+                if (canvas.width !== cropW || canvas.height !== cropH) {
+                  canvas.width = cropW;
+                  canvas.height = cropH;
+                }
+                ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+                detections = await nativeBarcodeDetector.detect(canvas);
+              } else {
+                detections = await nativeBarcodeDetector.detect(video);
+              }
+
               if (detections && detections.length > 0 && detections[0]?.rawValue) {
                 const detectDuration = Math.round((performance.now() - tNativeStart) * 10) / 10;
                 metricsRef.current.decodeTimeMs = detectDuration;
                 metricsRef.current.activeGear = 'fast';
 
-                canvas.width = Math.min(vw, 1280);
-                canvas.height = Math.round((canvas.width / vw) * vh);
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                if (!isSoftwareZoom2x) {
+                  canvas.width = Math.min(vw, 1280);
+                  canvas.height = Math.round((canvas.width / vw) * vh);
+                  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                }
                 const exactPhoto = canvas.toDataURL('image/jpeg', 0.85);
 
                 onCodeFound(detections[0].rawValue, detections[0].format || 'BARCODE', exactPhoto);
@@ -531,18 +560,13 @@ export default function ScannerModal({
           // ── BƯỚC 2: ZXING C++ WASM ENGINE (DUAL-PASS: FULL FRAME + CENTER HIGH-RES) ──
           if (readBarcodesFromImageData) {
             const tCropStart = performance.now();
-            const roi = calculateExactRoi();
             let targetW: number;
             let targetH: number;
 
-            // Luân phiên pass:
-            // - Pass Full Frame (Even): Quét toàn bộ khung camera, không bao giờ bị cắt cụt vạch
-            // - Pass Center High-Res (Odd): Độ phân giải 1:1 gốc cho tem số seri cực nhỏ
-            const isCenterPass = zoomLevel > 1 || (totalFrames % 2 === 0 && roi !== null);
-
-            if (zoomLevel > 1) {
-              const cropW = Math.round(vw * 0.55);
-              const cropH = Math.round(vh * 0.55);
+            if (isSoftwareZoom2x) {
+              // Zoom 2x kỹ thuật số: Crop tâm 50% nguyên bản cảm biến (độ nét tối đa cho tem nhỏ)
+              const cropW = Math.round(vw * 0.5);
+              const cropH = Math.round(vh * 0.5);
               const cropX = Math.round((vw - cropW) / 2);
               const cropY = Math.round((vh - cropH) / 2);
               targetW = cropW;
@@ -552,22 +576,27 @@ export default function ScannerModal({
                 canvas.height = targetH;
               }
               ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH);
-            } else if (isCenterPass && roi) {
-              targetW = roi.cropW;
-              targetH = roi.cropH;
-              if (canvas.width !== targetW || canvas.height !== targetH) {
-                canvas.width = targetW;
-                canvas.height = targetH;
-              }
-              ctx.drawImage(video, roi.cropX, roi.cropY, roi.cropW, roi.cropH, 0, 0, targetW, targetH);
             } else {
-              targetW = Math.min(vw, 1280);
-              targetH = Math.round((targetW / vw) * vh);
-              if (canvas.width !== targetW || canvas.height !== targetH) {
-                canvas.width = targetW;
-                canvas.height = targetH;
+              const roi = calculateExactRoi();
+              const isCenterPass = totalFrames % 2 === 0 && roi !== null;
+
+              if (isCenterPass && roi) {
+                targetW = roi.cropW;
+                targetH = roi.cropH;
+                if (canvas.width !== targetW || canvas.height !== targetH) {
+                  canvas.width = targetW;
+                  canvas.height = targetH;
+                }
+                ctx.drawImage(video, roi.cropX, roi.cropY, roi.cropW, roi.cropH, 0, 0, targetW, targetH);
+              } else {
+                targetW = Math.min(vw, 1280);
+                targetH = Math.round((targetW / vw) * vh);
+                if (canvas.width !== targetW || canvas.height !== targetH) {
+                  canvas.width = targetW;
+                  canvas.height = targetH;
+                }
+                ctx.drawImage(video, 0, 0, targetW, targetH);
               }
-              ctx.drawImage(video, 0, 0, targetW, targetH);
             }
 
             const imageData = ctx.getImageData(0, 0, targetW, targetH);
@@ -613,7 +642,7 @@ export default function ScannerModal({
     };
 
     animationFrameRef.current = requestAnimationFrame(processFrame);
-  }, [calculateExactRoi, onCodeFound, zoomLevel]);
+  }, [calculateExactRoi, onCodeFound]);
 
   // ─── KHỞI ĐỘNG CAMERA & ĐO THỜI GIAN MỞ CAMERA ĐỘC LẬP ──────────────────
   const startCamera = useCallback(
@@ -684,9 +713,16 @@ export default function ScannerModal({
                   max: capabilities.zoom.max || 5,
                   step: capabilities.zoom.step || 0.1,
                 });
+                zoomLevelRef.current = 1;
+                isHardwareZoomActiveRef.current = false;
+                setIsHardwareZoomActive(false);
                 setZoomLevel(1);
               } else {
                 setHasZoom(false);
+                zoomLevelRef.current = 1;
+                isHardwareZoomActiveRef.current = false;
+                setIsHardwareZoomActive(false);
+                setZoomLevel(1);
               }
 
               if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
@@ -753,21 +789,36 @@ export default function ScannerModal({
     }
   };
 
-  // ─── Phóng to 2x (Hardware Zoom hoặc Software Zoom) ──────────────────────
-  const handleToggleZoom = async () => {
-    const nextZoom = zoomLevel === 1 ? 2 : 1;
+  // ─── Phóng to 1x / 2x (Hỗ trợ cả Hardware Zoom & Software High-Res Digital Zoom) ───
+  const handleSetZoom = async (targetLevel: number) => {
+    const nextZoom = targetLevel === 2 ? 2 : 1;
+    zoomLevelRef.current = nextZoom;
     setZoomLevel(nextZoom);
 
     const track = streamRef.current?.getVideoTracks()[0];
     if (track && hasZoom) {
       try {
+        const hardwareZoomVal = nextZoom === 2 ? Math.min(2, zoomMinMax.max) : (zoomMinMax.min || 1);
         await (track as any).applyConstraints({
-          advanced: [{ zoom: nextZoom === 2 ? Math.min(2, zoomMinMax.max) : 1 }],
+          advanced: [{ zoom: hardwareZoomVal }],
         });
+        const hwActive = nextZoom > 1;
+        isHardwareZoomActiveRef.current = hwActive;
+        setIsHardwareZoomActive(hwActive);
+        return;
       } catch (e) {
-        console.warn('Lỗi đổi zoom phần cứng:', e);
+        console.warn('Lỗi đổi zoom phần cứng, tự động fallback sang zoom kỹ thuật số:', e);
+        isHardwareZoomActiveRef.current = false;
+        setIsHardwareZoomActive(false);
       }
+    } else {
+      isHardwareZoomActiveRef.current = false;
+      setIsHardwareZoomActive(false);
     }
+  };
+
+  const handleToggleZoom = () => {
+    handleSetZoom(zoomLevelRef.current === 1 ? 2 : 1);
   };
 
   // ─── Đổi camera ──────────────────────────────────────────────────────────
@@ -1062,8 +1113,9 @@ export default function ScannerModal({
                 objectFit: 'cover',
                 display: 'block',
                 cursor: 'pointer',
-                transform: !hasZoom && zoomLevel > 1 ? 'scale(1.4)' : 'none',
-                transition: 'transform 0.25s ease',
+                transform: !isHardwareZoomActive && zoomLevel > 1 ? 'scale(2)' : 'none',
+                transformOrigin: 'center center',
+                transition: 'transform 0.25s ease-out',
               }}
             />
 
@@ -1141,39 +1193,70 @@ export default function ScannerModal({
                     maxWidth: '92%',
                   }}
                 >
-                  {scanIdleSeconds < 3 && '🎯 Quét toàn màn hình • Giữ cách tem 15-25cm • Bấm [🔍 Zoom 2x] nếu tem nhỏ'}
-                  {scanIdleSeconds >= 3 && scanIdleSeconds < 6 && '💡 Thử bấm nút [🔍 Zoom 2x] ở góc phải để phóng to mã vạch'}
+                  {scanIdleSeconds < 3 && '🎯 Quét toàn màn hình • Giữ cách tem 15-25cm • Bấm nút [2x] nếu tem nhỏ'}
+                  {scanIdleSeconds >= 3 && scanIdleSeconds < 6 && '💡 Thử bấm nút [2x] ở góc phải để phóng to mã vạch'}
                   {scanIdleSeconds >= 6 && '⚡ Tem bóng/lóa? Nghiêng nhẹ máy hoặc bấm [📷 Chụp ảnh bằng máy]'}
                 </div>
               </div>
             )}
 
-            {/* Nút Zoom nhanh 1x / 2x trên màn hình camera */}
-            {cameraActive && (
-              <button
-                type="button"
-                onClick={handleToggleZoom}
+            {/* Nút chọn Zoom 1x / 2x nổi trên camera */}
+            {cameraActive && !isLoadingCamera && (
+              <div
                 style={{
                   position: 'absolute',
                   top: 12,
                   right: 12,
-                  background: zoomLevel > 1 ? 'rgba(59, 130, 246, 0.95)' : 'rgba(0, 0, 0, 0.72)',
-                  color: '#fff',
-                  border: '1px solid rgba(255, 255, 255, 0.35)',
-                  borderRadius: 16,
-                  padding: '5px 12px',
-                  fontSize: '0.78rem',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  zIndex: 5,
-                  display: 'flex',
+                  display: 'inline-flex',
                   alignItems: 'center',
-                  gap: 4,
-                  boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+                  background: 'rgba(15, 23, 42, 0.85)',
+                  backdropFilter: 'blur(8px)',
+                  borderRadius: 24,
+                  padding: '3px',
+                  border: '1px solid rgba(255, 255, 255, 0.25)',
+                  zIndex: 6,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
                 }}
               >
-                🔍 {zoomLevel > 1 ? 'Zoom 2x (Đang bật)' : 'Zoom 2x'}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetZoom(1)}
+                  style={{
+                    padding: '4px 12px',
+                    borderRadius: 20,
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    background: zoomLevel === 1 ? '#2563eb' : 'transparent',
+                    color: zoomLevel === 1 ? '#ffffff' : '#94a3b8',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.18s ease',
+                    letterSpacing: '0.5px',
+                  }}
+                  title="Góc nhìn chuẩn 1x"
+                >
+                  1x
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetZoom(2)}
+                  style={{
+                    padding: '4px 12px',
+                    borderRadius: 20,
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    background: zoomLevel === 2 ? '#2563eb' : 'transparent',
+                    color: zoomLevel === 2 ? '#ffffff' : '#94a3b8',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.18s ease',
+                    letterSpacing: '0.5px',
+                  }}
+                  title="Phóng to 2x (Đọc tem mã vạch siêu nhỏ)"
+                >
+                  2x
+                </button>
+              </div>
             )}
 
             {/* Toast thông báo chế độ quét liên tục */}
@@ -1292,14 +1375,14 @@ export default function ScannerModal({
               <span>Chụp ảnh bằng máy</span>
             </button>
 
-            {/* Nút Zoom chỉ hiện khi capability thực tế hỗ trợ */}
-            {hasZoom && (
+            {/* Nút Zoom 1x / 2x dưới thanh công cụ */}
+            {cameraActive && (
               <button
                 type="button"
                 className={`btn ${zoomLevel > 1 ? 'btn-primary' : 'btn-secondary'}`}
                 style={{ padding: '8px 12px', fontSize: '0.85rem' }}
                 onClick={handleToggleZoom}
-                title="Phóng to 2x phần cứng giúp đọc tem mã nhỏ siêu nét"
+                title="Chuyển đổi phóng to 1x / 2x"
               >
                 {zoomLevel > 1 ? '🔍 2x' : '🔍 1x'}
               </button>
