@@ -596,5 +596,125 @@ body {
   font-family: ui-monospace, monospace;
 }
 
+/* ═══════════════════════════════════════════════════════════════════ */
+/* THEME 4: APPLE LIQUID GLASS (iOS 18 / VisionOS Acrylic Glass)       */
+/* ═══════════════════════════════════════════════════════════════════ */
+[data-theme="apple"] {
+  --bg-primary: #000000;
+  --bg-card: rgba(28, 28, 30, 0.65);
+  --bg-card-hover: rgba(44, 44, 46, 0.75);
+  --bg-input: rgba(255, 255, 255, 0.06);
+  --border-color: rgba(255, 255, 255, 0.13);
+  --border-focus: #0a84ff;
+
+  --text-primary: #ffffff;
+  --text-secondary: rgba(235, 235, 245, 0.65);
+  --text-muted: rgba(235, 235, 245, 0.42);
+
+  --primary: #0a84ff;
+  --primary-hover: #0071e3;
+  --primary-light: rgba(10, 132, 255, 0.18);
+
+  --radius-sm: 12px;
+  --radius-md: 18px;
+  --radius-lg: 22px;
+  --radius-full: 9999px;
+  --font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+}
+
+[data-theme="apple"] body {
+  background-color: #000000;
+  background-image: radial-gradient(circle at 50% -10%, rgba(10, 132, 255, 0.15), transparent 60%),
+                    radial-gradient(circle at 100% 70%, rgba(175, 82, 222, 0.08), transparent 50%),
+                    radial-gradient(circle at 0% 40%, rgba(48, 209, 88, 0.06), transparent 45%);
+}
+
+[data-theme="apple"] .app-container {
+  background: transparent;
+}
+
+[data-theme="apple"] .card {
+  background: rgba(28, 28, 30, 0.65);
+  backdrop-filter: blur(32px) saturate(190%);
+  -webkit-backdrop-filter: blur(32px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 20px;
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.22),
+              0 12px 36px rgba(0, 0, 0, 0.52);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
+}
+
+[data-theme="apple"] .app-header {
+  background: rgba(18, 18, 20, 0.72);
+  backdrop-filter: blur(30px) saturate(190%);
+  -webkit-backdrop-filter: blur(30px) saturate(190%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="apple"] .bottom-nav {
+  background: rgba(22, 22, 26, 0.78);
+  backdrop-filter: blur(35px) saturate(200%);
+  -webkit-backdrop-filter: blur(35px) saturate(200%);
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.18),
+              0 -6px 24px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="apple"] .btn-primary {
+  background: #0a84ff;
+  color: #ffffff;
+  border-radius: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.35),
+              0 6px 20px rgba(10, 132, 255, 0.38);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-theme="apple"] .btn-primary:active {
+  background: #0071e3;
+  transform: scale(0.97);
+}
+
+[data-theme="apple"] .btn-secondary {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: 14px;
+  color: #ffffff;
+}
+
+[data-theme="apple"] .input,
+[data-theme="apple"] .select,
+[data-theme="apple"] .textarea {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: 14px;
+  color: #ffffff;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+[data-theme="apple"] .input:focus,
+[data-theme="apple"] .select:focus,
+[data-theme="apple"] .textarea:focus {
+  border-color: #0a84ff;
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.25);
+}
+
+[data-theme="apple"] .badge {
+  border-radius: 20px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+
 
 
