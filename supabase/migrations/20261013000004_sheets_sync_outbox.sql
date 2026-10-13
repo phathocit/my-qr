@@ -76,6 +76,57 @@ AFTER INSERT OR UPDATE ON public.products
 FOR EACH ROW
 EXECUTE FUNCTION public.fn_trg_products_sheets_outbox();
 
+-- Trigger Outbox cho devices (Giai đoạn 2: Tab theo từng Model)
+CREATE OR REPLACE FUNCTION public.fn_trg_devices_sheets_outbox()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    INSERT INTO public.sheets_sync_outbox (entity_type, entity_id, model_id, action, status, next_retry_at)
+    VALUES ('DEVICE', NEW.id, NEW.product_id, 'UPSERT', 'PENDING', now())
+    ON CONFLICT (entity_type, entity_id) WHERE status IN ('PENDING', 'PROCESSING')
+    DO UPDATE SET 
+        model_id = NEW.product_id,
+        updated_at = now(),
+        next_retry_at = now();
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_devices_sheets_outbox ON public.devices;
+CREATE TRIGGER trg_devices_sheets_outbox
+AFTER INSERT OR UPDATE ON public.devices
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_trg_devices_sheets_outbox();
+
+-- Trigger Outbox cho warranty_cases (Giai đoạn 3: Tab Bảo hành)
+CREATE OR REPLACE FUNCTION public.fn_trg_warranty_cases_sheets_outbox()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    INSERT INTO public.sheets_sync_outbox (entity_type, entity_id, action, status, next_retry_at)
+    VALUES ('WARRANTY_CASE', NEW.id, 'UPSERT', 'PENDING', now())
+    ON CONFLICT (entity_type, entity_id) WHERE status IN ('PENDING', 'PROCESSING')
+    DO UPDATE SET 
+        updated_at = now(),
+        next_retry_at = now();
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_warranty_cases_sheets_outbox ON public.warranty_cases;
+CREATE TRIGGER trg_warranty_cases_sheets_outbox
+AFTER INSERT OR UPDATE ON public.warranty_cases
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_trg_warranty_cases_sheets_outbox();
+
+
+
 -- 5. RPC Functions: Claim Outbox Jobs (Lease locking)
 CREATE OR REPLACE FUNCTION public.rpc_claim_sheets_outbox_jobs(
     p_worker_id TEXT,

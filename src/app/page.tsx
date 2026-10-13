@@ -3148,20 +3148,44 @@ export default function HomePage() {
 
               {/* Action Buttons */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
                   <button
                     type="button"
                     className="btn btn-primary"
-                    style={{ flex: 1, padding: '10px 12px', fontSize: '0.85rem' }}
+                    style={{ padding: '8px 6px', fontSize: '0.75rem' }}
                     onClick={() => handleSheetsAction('reconcile_catalog')}
                     disabled={sheetsLoading || !sheetsStatus?.configured}
+                    title="Đối soát tab Danh mục sản phẩm"
                   >
-                    {sheetsLoading ? 'Đang thực thi...' : '📋 Đối soát tab Danh mục (Giai đoạn 1)'}
+                    📋 Tab Danh mục (GĐ 1)
                   </button>
                   <button
                     type="button"
+                    className="btn btn-primary"
+                    style={{ padding: '8px 6px', fontSize: '0.75rem' }}
+                    onClick={() => handleSheetsAction('reconcile_model_tabs')}
+                    disabled={sheetsLoading || !sheetsStatus?.configured}
+                    title="Đối soát các tab theo Model thiết bị"
+                  >
+                    📱 Tab Model (GĐ 2)
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ padding: '8px 6px', fontSize: '0.75rem' }}
+                    onClick={() => handleSheetsAction('reconcile_warranty')}
+                    disabled={sheetsLoading || !sheetsStatus?.configured}
+                    title="Đối soát tab Hồ sơ Bảo hành"
+                  >
+                    🛡️ Tab Bảo hành (GĐ 3)
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
                     className="btn btn-secondary"
-                    style={{ flex: 1, padding: '10px 12px', fontSize: '0.85rem' }}
+                    style={{ flex: 1, padding: '9px 12px', fontSize: '0.8rem' }}
                     onClick={() => handleSheetsAction('sync_pending')}
                     disabled={sheetsLoading || !sheetsStatus?.configured}
                   >

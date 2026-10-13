@@ -123,7 +123,68 @@ export async function POST(req: Request) {
       });
     }
 
-    // 3. Action: Reset retry cho các job lỗi (Retry Failed)
+    // 3. Action: Đối soát các Tab Model (Reconcile Model Tabs)
+    if (action === 'reconcile_model_tabs') {
+      const [prodsRes, devsRes] = await Promise.all([
+        adminClient.from('products').select('*'),
+        adminClient.from('devices').select(`
+          *,
+          product:products(*),
+          owner_party:parties!owner_party_id(*),
+          holder_party:parties!holder_party_id(*),
+          warranty_policies:warranty_policies(*)
+        `),
+      ]);
+
+      if (prodsRes.error) throw prodsRes.error;
+      if (devsRes.error) throw devsRes.error;
+
+      const products: Product[] = prodsRes.data || [];
+      const rawDevices: any[] = devsRes.data || [];
+
+      const devices: Device[] = rawDevices.map((dev: any) => {
+        const enriched = { ...dev };
+        if (dev.warranty_policies && Array.isArray(dev.warranty_policies)) {
+          enriched.supplier_warranty = dev.warranty_policies.find((p: any) => p.policy_type === 'SUPPLIER_POLICY') || null;
+          enriched.customer_warranty = dev.warranty_policies.find((p: any) => p.policy_type === 'CUSTOMER_POLICY') || null;
+        }
+        return enriched;
+      });
+
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+      const result = await googleSheetsService.reconcileModelTabs(products, devices, appUrl);
+
+      return NextResponse.json({
+        success: true,
+        message: `Đã đối soát xong các tab Model: ${result.totalModels} dòng sản phẩm, ${result.totalDevices} thiết bị (${result.updatedCount} cập nhật, ${result.appendedCount} thêm mới).`,
+        result,
+      });
+    }
+
+    // 4. Action: Đối soát Tab Bảo hành (Reconcile Warranty)
+    if (action === 'reconcile_warranty') {
+      const { data: rawCases, error: caseErr } = await adminClient
+        .from('warranty_cases')
+        .select(`
+          *,
+          device:devices(*),
+          customer:parties!customer_id(*)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (caseErr) throw caseErr;
+
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+      const result = await googleSheetsService.reconcileWarrantySheet(rawCases || [], appUrl);
+
+      return NextResponse.json({
+        success: true,
+        message: `Đã đối soát xong tab Bảo hành: ${result.totalCases} hồ sơ (${result.updatedCount} cập nhật, ${result.appendedCount} thêm mới).`,
+        result,
+      });
+    }
+
+    // 5. Action: Reset retry cho các job lỗi (Retry Failed)
     if (action === 'retry_failed') {
       const { error: resetErr } = await adminClient
         .from('sheets_sync_outbox')
@@ -144,7 +205,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // 4. Action mặc định: Đồng bộ các job đang chờ trong Outbox (Lease / Claim)
+    // 5. Action mặc định: Đồng bộ các job đang chờ trong Outbox (Lease / Claim)
     const workerId = `worker-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     let claimedJobs: any[] = [];
 
@@ -216,6 +277,97 @@ export async function POST(req: Request) {
           await googleSheetsService.syncCatalogItem({
             product: prod,
             activeDeviceCount: count || 0,
+          });
+
+          // Hoàn tất job thành công
+          await adminClient.rpc('rpc_finish_sheets_outbox_job', {
+            p_job_id: job.id,
+            p_success: true,
+          }).catch(async () => {
+            await adminClient
+              .from('sheets_sync_outbox')
+              .update({ status: 'SUCCESS', locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+              .eq('id', job.id);
+          });
+
+          successCount++;
+        } else if (job.entity_type === 'DEVICE') {
+          // Lấy thông tin chi tiết thiết bị kèm product và chính sách bảo hành
+          const { data: rawDev, error: devErr } = await adminClient
+            .from('devices')
+            .select(`
+              *,
+              product:products(*),
+              owner_party:parties!owner_party_id(*),
+              holder_party:parties!holder_party_id(*),
+              warranty_policies:warranty_policies(*)
+            `)
+            .eq('id', job.entity_id)
+            .single();
+
+          if (devErr || !rawDev) {
+            // Thiết bị đã bị xóa hoặc không tìm thấy
+            await adminClient
+              .from('sheets_sync_outbox')
+              .update({ status: 'SUCCESS', updated_at: new Date().toISOString() })
+              .eq('id', job.id);
+            continue;
+          }
+
+          const dev: Device = { ...rawDev };
+          if (rawDev.warranty_policies && Array.isArray(rawDev.warranty_policies)) {
+            dev.supplier_warranty = rawDev.warranty_policies.find((p: any) => p.policy_type === 'SUPPLIER_POLICY') || null;
+            dev.customer_warranty = rawDev.warranty_policies.find((p: any) => p.policy_type === 'CUSTOMER_POLICY') || null;
+          }
+
+          const product = dev.product;
+          if (!product) {
+            throw new Error(`Không tìm thấy dòng sản phẩm cho thiết bị ${dev.management_code}`);
+          }
+
+          const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+          await googleSheetsService.syncDeviceItem({
+            device: dev,
+            product,
+            appUrl,
+          });
+
+          // Hoàn tất job thành công
+          await adminClient.rpc('rpc_finish_sheets_outbox_job', {
+            p_job_id: job.id,
+            p_success: true,
+          }).catch(async () => {
+            await adminClient
+              .from('sheets_sync_outbox')
+              .update({ status: 'SUCCESS', locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+              .eq('id', job.id);
+          });
+
+          successCount++;
+        } else if (job.entity_type === 'WARRANTY_CASE') {
+          // Lấy thông tin hồ sơ bảo hành kèm thiết bị
+          const { data: rawCase, error: caseErr } = await adminClient
+            .from('warranty_cases')
+            .select(`
+              *,
+              device:devices(*)
+            `)
+            .eq('id', job.entity_id)
+            .single();
+
+          if (caseErr || !rawCase) {
+            // Ca bảo hành đã bị xóa hoặc không tìm thấy
+            await adminClient
+              .from('sheets_sync_outbox')
+              .update({ status: 'SUCCESS', updated_at: new Date().toISOString() })
+              .eq('id', job.id);
+            continue;
+          }
+
+          const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+          await googleSheetsService.syncWarrantyCaseItem({
+            warrantyCase: rawCase,
+            appUrl,
           });
 
           // Hoàn tất job thành công
