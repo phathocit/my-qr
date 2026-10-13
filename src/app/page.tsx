@@ -36,7 +36,7 @@ export default function HomePage() {
 
   // Scanner Modal State
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [scannerTarget, setScannerTarget] = useState<'search' | 'inbound' | 'outbound' | 'warranty' | 'return'>('search');
+  const [scannerTarget, setScannerTarget] = useState<'search' | 'inbound' | 'outbound' | 'warranty' | 'return' | 'replace'>('search');
 
   // Search State
   const [searchQuery, setSearchQuery] = useState('');
@@ -258,14 +258,23 @@ export default function HomePage() {
         showNotice(`Đã thêm ${dev.management_code} vào phiếu xuất`, 'success');
       }
     } else if (scannerTarget === 'return') {
-      const dev = devices.find(
-        (d) => (d.serial_number === code || d.management_code === code) && d.active_assignment
-      );
+      const clean = code.trim().toLowerCase();
+      const dev = devices.find((d) => {
+        const matchSn = d.serial_number?.trim().toLowerCase() === clean;
+        const matchMgmt = d.management_code?.trim().toLowerCase() === clean;
+        return (matchSn || matchMgmt) && (d.active_assignment || d.holder_type === 'EXTERNAL_PARTY');
+      });
       if (!dev) {
         showNotice(`Mã ${code} không có lượt mượn/cấp đang mở để thu hồi`, 'error');
         return;
       }
       setReturnDevice(dev);
+    } else if (scannerTarget === 'replace') {
+      setReplaceNewSerial(code);
+      if (!replaceNewCode) {
+        setReplaceNewCode(`DEV-REP-${code.slice(-6).toUpperCase()}`);
+      }
+      showNotice(`Đã nhận diện Serial mới: ${code}`, 'success');
     }
   };
 
@@ -601,6 +610,7 @@ export default function HomePage() {
       productName: string;
       brand: string;
       category?: string;
+      supplierName: string | null;
       items: Device[];
       inStorageCount: number;
       externalCount: number;
@@ -626,11 +636,13 @@ export default function HomePage() {
 
       const pId = dev.product_id || dev.product?.id || 'unknown';
       if (!map.has(pId)) {
+        const sup = inventoryService.findSupplierForDevice(dev, parties);
         map.set(pId, {
           productId: pId,
           productName: dev.product?.name || 'Sản phẩm khác',
           brand: dev.product?.brand || 'Khác',
           category: dev.product?.category,
+          supplierName: sup?.name || null,
           items: [],
           inStorageCount: 0,
           externalCount: 0,
@@ -639,6 +651,10 @@ export default function HomePage() {
         });
       }
       const group = map.get(pId)!;
+      if (!group.supplierName) {
+        const sup = inventoryService.findSupplierForDevice(dev, parties);
+        if (sup) group.supplierName = sup.name;
+      }
       group.items.push(dev);
       if (dev.holder_type === 'INTERNAL_STORAGE') group.inStorageCount++;
       if (dev.holder_type === 'EXTERNAL_PARTY') group.externalCount++;
@@ -647,7 +663,7 @@ export default function HomePage() {
     }
 
     return Array.from(map.values()).sort((a, b) => b.items.length - a.items.length);
-  }, [devices, inventorySearch, inventoryFilter]);
+  }, [devices, parties, inventorySearch, inventoryFilter]);
 
   const toggleModelExpand = (modelId: string) => {
     setExpandedModels((prev) => ({
@@ -1476,6 +1492,13 @@ export default function HomePage() {
                             style={{ flex: 1, minHeight: 36, padding: '6px 10px', fontSize: '0.8rem' }}
                             onClick={() => {
                               setSelectedCase(c);
+                              const matchedSup = inventoryService.findSupplierForDevice(c.device, parties);
+                              if (matchedSup) {
+                                setSendSupplierPartyId(matchedSup.id);
+                              } else {
+                                const sup = parties.find((p) => p.type === 'SUPPLIER');
+                                if (sup) setSendSupplierPartyId(sup.id);
+                              }
                               setSendSupplierModalOpen(true);
                             }}
                           >
@@ -1686,9 +1709,24 @@ export default function HomePage() {
                             <div style={{ fontWeight: 700, fontSize: '0.98rem', color: '#f8fafc' }}>
                               {group.productName}
                             </div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 3 }}>
                               <span className="badge badge-internal">{group.brand}</span>
                               {group.category && <span>• {group.category}</span>}
+                              {group.supplierName && (
+                                <span
+                                  style={{
+                                    fontSize: '0.72rem',
+                                    color: '#38bdf8',
+                                    background: 'rgba(56, 189, 248, 0.12)',
+                                    padding: '1px 6px',
+                                    borderRadius: 4,
+                                    border: '1px solid rgba(56, 189, 248, 0.3)',
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  🏢 NCC: {group.supplierName}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -1980,46 +2018,84 @@ export default function HomePage() {
       )}
 
       {/* Send Supplier Modal */}
-      {sendSupplierModalOpen && selectedCase && (
-        <div className="modal-overlay" onClick={() => setSendSupplierModalOpen(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Bàn giao gửi NCC / TTBH</h3>
-            <div style={{ fontSize: '0.85rem' }}>
-              Hồ sơ: <strong>{selectedCase.code}</strong> - {selectedCase.device?.product?.name}
-            </div>
-            <div className="form-group">
-              <label className="form-label">Đơn vị / Nhà cung cấp nhận bảo hành (*):</label>
-              <select
-                className="select"
-                value={sendSupplierPartyId}
-                onChange={(e) => setSendSupplierPartyId(e.target.value)}
-              >
-                <option value="">-- Chọn đơn vị bảo hành --</option>
-                {parties.filter((p) => p.type === 'SUPPLIER').map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Ghi chú gửi hàng / Số biên nhận:</label>
-              <textarea
-                className="textarea"
-                placeholder="Số phiếu hẹn bảo hành NCC: 12345..."
-                value={sendSupplierNotes}
-                onChange={(e) => setSendSupplierNotes(e.target.value)}
-              />
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setSendSupplierModalOpen(false)}>
-                Hủy
-              </button>
-              <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleSendSupplierSubmit} disabled={loading}>
-                Xác nhận gửi NCC
-              </button>
+      {sendSupplierModalOpen && selectedCase && (() => {
+        const matchedSup = inventoryService.findSupplierForDevice(selectedCase.device, parties) || parties.find((p) => p.id === sendSupplierPartyId) || parties.find((p) => p.type === 'SUPPLIER');
+        const supplierName = matchedSup?.name || 'Nhà phân phối / TTBH chính hãng';
+
+        return (
+          <div className="modal-overlay" onClick={() => setSendSupplierModalOpen(false)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Bàn giao gửi NCC / TTBH</h3>
+              <div style={{ fontSize: '0.85rem' }}>
+                Hồ sơ: <strong>{selectedCase.code}</strong> - {selectedCase.device?.product?.name}
+              </div>
+              <div className="form-group" style={{ marginTop: 10 }}>
+                <label className="form-label">Đơn vị / Nhà cung cấp bảo hành (*):</label>
+                <div
+                  style={{
+                    padding: '10px 14px',
+                    background: 'rgba(59, 130, 246, 0.12)',
+                    border: '1px solid rgba(59, 130, 246, 0.4)',
+                    borderRadius: 'var(--radius-sm)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#93c5fd' }}>
+                      🏢 {supplierName}
+                    </div>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+                      Cố định tự động theo phân phối model {selectedCase.device?.product?.brand} ({selectedCase.device?.product?.name})
+                    </div>
+                  </div>
+                  <span
+                    style={{
+                      fontSize: '0.72rem',
+                      background: 'var(--primary)',
+                      color: '#fff',
+                      padding: '3px 8px',
+                      borderRadius: 10,
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    🔒 Đã khóa NCC
+                  </span>
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Ghi chú gửi hàng / Số biên nhận:</label>
+                <textarea
+                  className="textarea"
+                  placeholder="Số phiếu hẹn bảo hành NCC: 12345..."
+                  value={sendSupplierNotes}
+                  onChange={(e) => setSendSupplierNotes(e.target.value)}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setSendSupplierModalOpen(false)}>
+                  Hủy
+                </button>
+                <button
+                  className="btn btn-primary"
+                  style={{ flex: 1 }}
+                  onClick={() => {
+                    if (matchedSup && !sendSupplierPartyId) {
+                      setSendSupplierPartyId(matchedSup.id);
+                    }
+                    handleSendSupplierSubmit();
+                  }}
+                  disabled={loading}
+                >
+                  Xác nhận gửi NCC
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Local Repair Modal */}
       {localRepairModalOpen && selectedCase && (
@@ -2099,13 +2175,28 @@ export default function HomePage() {
             </div>
             <div className="form-group">
               <label className="form-label">Serial Number mới (nếu có):</label>
-              <input
-                type="text"
-                className="input"
-                placeholder="VD: PF4Y99B2"
-                value={replaceNewSerial}
-                onChange={(e) => setReplaceNewSerial(e.target.value)}
-              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  className="input"
+                  style={{ flex: 1 }}
+                  placeholder="VD: CN-DELL-NEW-99 hoặc bấm Quét"
+                  value={replaceNewSerial}
+                  onChange={(e) => setReplaceNewSerial(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ padding: '0 12px', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
+                  onClick={() => {
+                    setScannerTarget('replace');
+                    setScannerOpen(true);
+                  }}
+                  title="Quét mã vạch / QR Serial mới"
+                >
+                  📷 Quét
+                </button>
+              </div>
             </div>
             <div className="form-group">
               <label className="form-label">Lý do & Chứng từ đổi máy:</label>
@@ -2261,6 +2352,8 @@ export default function HomePage() {
             ? 'Quét mã nhập kho liên tục'
             : scannerTarget === 'outbound'
             ? 'Quét mã xuất kho'
+            : scannerTarget === 'replace'
+            ? 'Quét Serial mới (Đổi máy 1-1)'
             : 'Quét mã thu hồi'
         }
       />

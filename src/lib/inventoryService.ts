@@ -10,10 +10,11 @@ const INITIAL_PRODUCTS: Product[] = [
 ];
 
 const INITIAL_PARTIES: Party[] = [
-  { id: 'pt-1', name: 'Công ty Cổ phần Tin học ABC', type: 'SUPPLIER', phone: '0901234567', created_at: new Date().toISOString() },
-  { id: 'pt-2', name: 'Nguyễn Văn An (Cá nhân)', type: 'CUSTOMER_INDIVIDUAL', phone: '0988776655', created_at: new Date().toISOString() },
-  { id: 'pt-3', name: 'Công ty TNHH Giải Pháp Phần Mềm XYZ', type: 'CUSTOMER_ORG', phone: '0283838383', created_at: new Date().toISOString() },
-  { id: 'pt-4', name: 'Trần Văn Bình (Kỹ thuật nội bộ)', type: 'INTERNAL_MEMBER', phone: '0912345678', created_at: new Date().toISOString() },
+  { id: 'pt-1', name: 'Synnex FPT Distribution', type: 'SUPPLIER', phone: '02473006666', created_at: new Date().toISOString() },
+  { id: 'pt-2', name: 'Digiworld (DGW)', type: 'SUPPLIER', phone: '02839290059', created_at: new Date().toISOString() },
+  { id: 'pt-3', name: 'Công ty CP Tin Học Mai Hoàng', type: 'SUPPLIER', phone: '02435377109', created_at: new Date().toISOString() },
+  { id: 'pt-long', name: 'Nguyễn Hoàng Long (IT Nội bộ)', type: 'INTERNAL_MEMBER', phone: '0988776655', created_at: new Date().toISOString() },
+  { id: 'pt-4', name: 'Công ty Test Đối Tác', type: 'CUSTOMER_ORG', phone: '0901234567', created_at: new Date().toISOString() },
 ];
 
 const INITIAL_DEVICES: Device[] = [
@@ -41,6 +42,33 @@ const INITIAL_DEVICES: Device[] = [
       terms_note: 'Bảo hành chính hãng Lenovo 36 tháng',
       created_at: new Date().toISOString(),
     },
+  },
+  {
+    id: 'd-dev-tp-04',
+    product_id: 'p-1',
+    product: INITIAL_PRODUCTS[0],
+    management_code: 'DEV-TP-04',
+    serial_number: 'PF-3A9804',
+    owner_type: 'INTERNAL',
+    holder_type: 'EXTERNAL_PARTY',
+    holder_party_id: 'pt-long',
+    holder_party: { id: 'pt-long', name: 'Nguyễn Hoàng Long (IT Nội bộ)', type: 'INTERNAL_MEMBER', created_at: new Date().toISOString() },
+    technical_condition: 'USABLE',
+    lifecycle: 'ACTIVE',
+    active_assignment: {
+      id: 'asg-loan-long',
+      device_id: 'd-dev-tp-04',
+      recipient_party_id: 'pt-long',
+      recipient_party: { id: 'pt-long', name: 'Nguyễn Hoàng Long (IT Nội bộ)', type: 'INTERNAL_MEMBER', created_at: new Date().toISOString() },
+      assignment_type: 'LOAN',
+      checkout_date: '2026-10-10T00:00:00.000Z',
+      expected_return_date: '2026-11-10',
+      checkout_condition: 'USABLE',
+      checkout_notes: 'Cấp máy ThinkPad làm dự án IT quý 4',
+      created_at: '2026-10-10T00:00:00.000Z',
+    },
+    created_at: new Date(Date.now() - 86400000 * 3).toISOString(),
+    updated_at: new Date().toISOString(),
   },
   {
     id: 'd-2',
@@ -117,6 +145,51 @@ class InventoryService {
     return `${supabaseUrl}/storage/v1/object/public/${bucket}/${storageKey}`;
   }
 
+  findSupplierForDevice(dev?: Device | null, parties?: Party[]): Party | null {
+    if (!dev || !parties || parties.length === 0) return null;
+    const suppliers = parties.filter((p) => p.type === 'SUPPLIER');
+    if (suppliers.length === 0) return null;
+
+    if (dev.inbound_receipt && (dev.inbound_receipt as any).supplier) {
+      return (dev.inbound_receipt as any).supplier;
+    }
+    if (dev.holder_party_id) {
+      const matchHolder = suppliers.find((s) => s.id === dev.holder_party_id);
+      if (matchHolder) return matchHolder;
+    }
+    const terms = (dev.supplier_warranty?.terms_note || '').toLowerCase();
+    if (terms) {
+      const matchTerms = suppliers.find((s) => terms.includes(s.name.toLowerCase()));
+      if (matchTerms) return matchTerms;
+    }
+
+    const brand = (dev.product?.brand || '').toLowerCase();
+    const prodName = (dev.product?.name || '').toLowerCase();
+
+    for (const s of suppliers) {
+      const sNotes = (s.notes || '').toLowerCase();
+      const sName = s.name.toLowerCase();
+      if (brand && (sNotes.includes(brand) || sName.includes(brand))) {
+        return s;
+      }
+    }
+
+    if (brand.includes('lenovo') || prodName.includes('thinkpad')) {
+      const s = suppliers.find((s) => s.name.toLowerCase().includes('fpt') || s.name.toLowerCase().includes('synnex'));
+      if (s) return s;
+    }
+    if (brand.includes('dareu') || brand.includes('fl-esports') || prodName.includes('dareu') || prodName.includes('cmk')) {
+      const s = suppliers.find((s) => s.name.toLowerCase().includes('mai hoàng'));
+      if (s) return s;
+    }
+    if (brand.includes('dell') || prodName.includes('ultrasharp')) {
+      const s = suppliers.find((s) => s.name.toLowerCase().includes('dgw') || s.name.toLowerCase().includes('digiworld'));
+      if (s) return s;
+    }
+
+    return suppliers[0] || null;
+  }
+
   async getDevices(): Promise<Device[]> {
     if (isSupabaseConfigured()) {
       const supabase = createClient();
@@ -128,7 +201,9 @@ class InventoryService {
           owner_party:parties!devices_owner_party_id_fkey(*),
           holder_party:parties!devices_holder_party_id_fkey(*),
           evidence_photos:evidence_photos(*),
-          warranty_policies:warranty_policies(*)
+          warranty_policies:warranty_policies(*),
+          assignments:assignments(*, recipient_party:parties(*)),
+          inbound_receipt:inbound_receipts(*, supplier:parties(*))
         `)
         .order('created_at', { ascending: false });
       if (!error && data) {
@@ -143,6 +218,9 @@ class InventoryService {
           if (dev.warranty_policies && Array.isArray(dev.warranty_policies)) {
             dev.supplier_warranty = dev.warranty_policies.find((p: any) => p.policy_type === 'SUPPLIER_POLICY') || null;
             dev.customer_warranty = dev.warranty_policies.find((p: any) => p.policy_type === 'CUSTOMER_POLICY') || null;
+          }
+          if (dev.assignments && Array.isArray(dev.assignments)) {
+            dev.active_assignment = dev.assignments.find((a: any) => !a.checkin_date) || null;
           }
           return dev as Device;
         });
@@ -163,7 +241,9 @@ class InventoryService {
           owner_party:parties!devices_owner_party_id_fkey(*),
           holder_party:parties!devices_holder_party_id_fkey(*),
           evidence_photos:evidence_photos(*),
-          warranty_policies:warranty_policies(*)
+          warranty_policies:warranty_policies(*),
+          assignments:assignments(*, recipient_party:parties(*)),
+          inbound_receipt:inbound_receipts(*, supplier:parties(*))
         `)
         .or(`management_code.eq.${trimmed},serial_number.eq.${trimmed}`)
         .single();
@@ -179,6 +259,9 @@ class InventoryService {
         if (dev.warranty_policies && Array.isArray(dev.warranty_policies)) {
           dev.supplier_warranty = dev.warranty_policies.find((p: any) => p.policy_type === 'SUPPLIER_POLICY') || null;
           dev.customer_warranty = dev.warranty_policies.find((p: any) => p.policy_type === 'CUSTOMER_POLICY') || null;
+        }
+        if (dev.assignments && Array.isArray(dev.assignments)) {
+          dev.active_assignment = dev.assignments.find((a: any) => !a.checkin_date) || null;
         }
         return dev as Device;
       }
@@ -491,6 +574,35 @@ class InventoryService {
     expected_return_date?: string;
     notes?: string;
   }): Promise<{ success: boolean; message: string }> {
+    if (isSupabaseConfigured()) {
+      const supabase = createClient();
+      const now = new Date().toISOString();
+
+      // 1. Ghi log assignment vào Supabase
+      const { error: asgErr } = await supabase.from('assignments').insert({
+        device_id: data.device_id,
+        recipient_party_id: data.recipient_id,
+        assignment_type: data.assignment_type,
+        checkout_date: now,
+        expected_return_date: data.expected_return_date || null,
+        checkout_condition: 'USABLE',
+        checkout_notes: data.notes || null,
+      });
+      if (asgErr) throw new Error('Không thể tạo phiếu bàn giao: ' + asgErr.message);
+
+      // 2. Chuyển thiết bị sang EXTERNAL_PARTY
+      const { error: devErr } = await supabase
+        .from('devices')
+        .update({
+          holder_type: 'EXTERNAL_PARTY',
+          holder_party_id: data.recipient_id,
+        })
+        .eq('id', data.device_id);
+      if (devErr) throw new Error('Không thể cập nhật trạng thái thiết bị: ' + devErr.message);
+
+      return { success: true, message: 'Đã bàn giao thiết bị thành công' };
+    }
+
     const dev = this.devices.find((d) => d.id === data.device_id);
     if (!dev) throw new Error('Không tìm thấy thiết bị');
     const readiness = this.checkOutboundReadiness(dev);
@@ -524,13 +636,56 @@ class InventoryService {
     condition: 'USABLE' | 'NEEDS_INSPECTION' | 'FAULTY';
     notes?: string;
   }): Promise<{ success: boolean; message: string }> {
+    if (isSupabaseConfigured()) {
+      const supabase = createClient();
+      const now = new Date().toISOString();
+
+      // 1. Đóng lượt bàn giao / mượn đang mở (checkin_date IS NULL)
+      const { data: openAsgs, error: findErr } = await supabase
+        .from('assignments')
+        .select('id')
+        .eq('device_id', data.device_id)
+        .is('checkin_date', null)
+        .order('created_at', { ascending: false });
+
+      if (openAsgs && openAsgs.length > 0) {
+        for (const asg of openAsgs) {
+          await supabase
+            .from('assignments')
+            .update({
+              checkin_date: now,
+              checkin_condition: data.condition,
+              checkin_notes: data.notes || null,
+            })
+            .eq('id', asg.id);
+        }
+      }
+
+      // 2. Chuyển thiết bị về kho nội bộ
+      const { error: devErr } = await supabase
+        .from('devices')
+        .update({
+          holder_type: 'INTERNAL_STORAGE',
+          holder_party_id: null,
+          technical_condition: data.condition,
+        })
+        .eq('id', data.device_id);
+
+      if (devErr) {
+        console.error('Lỗi cập nhật thiết bị:', devErr);
+        throw new Error('Không thể cập nhật trạng thái thiết bị: ' + devErr.message);
+      }
+
+      return { success: true, message: 'Đã thu hồi thiết bị về kho thành công' };
+    }
+
     const dev = this.devices.find((d) => d.id === data.device_id);
     if (!dev) throw new Error('Không tìm thấy thiết bị');
-    if (!dev.active_assignment) throw new Error('Thiết bị không có bản ghi bàn giao đang mở');
-
-    dev.active_assignment.checkin_date = new Date().toISOString();
-    dev.active_assignment.checkin_condition = data.condition;
-    dev.active_assignment.checkin_notes = data.notes;
+    if (dev.active_assignment) {
+      dev.active_assignment.checkin_date = new Date().toISOString();
+      dev.active_assignment.checkin_condition = data.condition;
+      dev.active_assignment.checkin_notes = data.notes;
+    }
 
     dev.holder_type = 'INTERNAL_STORAGE';
     dev.holder_party_id = null;
