@@ -17,10 +17,13 @@ export default function HomePage() {
   // Authentication State
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
-  const [loginEmail, setLoginEmail] = useState('hatranduyphat2004@gmail.com');
-  const [loginPassword, setLoginPassword] = useState('Admin@123456');
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [loginHoneypot, setLoginHoneypot] = useState('');
+  const [lockoutSeconds, setLockoutSeconds] = useState(0);
 
   // Core Data
   const [products, setProducts] = useState<Product[]>([]);
@@ -236,18 +239,34 @@ export default function HomePage() {
     initAuth();
   }, []);
 
+  useEffect(() => {
+    if (lockoutSeconds <= 0) return;
+    const timer = setInterval(() => {
+      setLockoutSeconds((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [lockoutSeconds]);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (lockoutSeconds > 0) return;
     setLoginError(null);
     setIsLoggingIn(true);
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+        body: JSON.stringify({
+          email: loginEmail,
+          password: loginPassword,
+          honeypot: loginHoneypot,
+        }),
       });
       const result = await res.json();
       if (!res.ok || !result.success) {
+        if (result.retryAfter) {
+          setLockoutSeconds(Number(result.retryAfter));
+        }
         throw new Error(result.error || 'Đăng nhập không thành công');
       }
 
@@ -262,6 +281,7 @@ export default function HomePage() {
       }
 
       setCurrentUser(data.session.user);
+      setLoginPassword('');
       showNotice(`Đăng nhập thành công với quyền quản trị: ${result.email}`, 'success');
       await refreshData();
     } catch (err: any) {
@@ -997,23 +1017,62 @@ export default function HomePage() {
   if (!currentUser && isSupabaseConfigured()) {
     return (
       <div className="app-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: 16 }}>
-        <div className="card" style={{ maxWidth: 440, width: '100%', padding: '28px 24px' }}>
+        <div className="card" style={{ maxWidth: 440, width: '100%', padding: '28px 24px', position: 'relative' }}>
           <div style={{ textAlign: 'center', marginBottom: 24 }}>
-            <div style={{ fontSize: '2.5rem', marginBottom: 8 }}>🔐</div>
+            <div style={{ fontSize: '2.5rem', marginBottom: 8 }}>🛡️</div>
             <h2 style={{ fontSize: '1.35rem', fontWeight: 700, margin: '0 0 6px 0' }}>Đăng Nhập Quản Trị Kho</h2>
-            <div style={{ display: 'flex', justifyContent: 'center', gap: 6, alignItems: 'center', marginTop: 4 }}>
-              <span className="env-badge success">Supabase Cloud</span>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Bảo mật Row Level Security</span>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 6, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}>
+              <span className="env-badge success">Bảo mật đa tầng</span>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Chống Brute-force & Timing Attack</span>
             </div>
           </div>
 
-          {loginError && (
+          {lockoutSeconds > 0 && (
+            <div
+              className="toast-notice error"
+              style={{
+                marginBottom: 16,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 4,
+                background: 'rgba(239, 68, 68, 0.15)',
+                border: '1px solid var(--danger)',
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-sm)',
+              }}
+            >
+              <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>🔒</span>
+                <span>Hệ thống tạm khóa tài khoản do nhập sai nhiều lần</span>
+              </div>
+              <div style={{ fontSize: '0.85rem' }}>
+                Thời gian mở khóa sau:{' '}
+                <strong style={{ color: 'var(--danger)' }}>
+                  {Math.floor(lockoutSeconds / 60)} phút {lockoutSeconds % 60} giây
+                </strong>
+              </div>
+            </div>
+          )}
+
+          {loginError && lockoutSeconds <= 0 && (
             <div className="toast-notice error" style={{ marginBottom: 16 }}>
               ✕ {loginError}
             </div>
           )}
 
           <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {/* Anti-bot Honeypot field (hidden from legitimate users) */}
+            <input
+              type="text"
+              name="company_tax_id"
+              tabIndex={-1}
+              autoComplete="off"
+              value={loginHoneypot}
+              onChange={(e) => setLoginHoneypot(e.target.value)}
+              style={{ position: 'absolute', opacity: 0, zIndex: -1, pointerEvents: 'none', width: 0, height: 0 }}
+              aria-hidden="true"
+            />
+
             <div>
               <label className="form-label" style={{ marginBottom: 6, display: 'block' }}>Email Quản trị viên:</label>
               <input
@@ -1022,36 +1081,71 @@ export default function HomePage() {
                 value={loginEmail}
                 onChange={(e) => setLoginEmail(e.target.value)}
                 placeholder="admin@example.com"
+                autoComplete="email"
                 required
+                disabled={lockoutSeconds > 0}
               />
             </div>
 
             <div>
-              <label className="form-label" style={{ marginBottom: 6, display: 'block' }}>Mật khẩu Quản trị:</label>
-              <input
-                type="password"
-                className="input"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <label className="form-label" style={{ margin: 0 }}>Mật khẩu Quản trị:</label>
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-muted)',
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: 0,
+                  }}
+                >
+                  {showPassword ? '🙈 Ẩn' : '👁️ Hiện'}
+                </button>
+              </div>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  className="input"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  autoComplete="current-password"
+                  required
+                  disabled={lockoutSeconds > 0}
+                />
+              </div>
             </div>
 
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={isLoggingIn}
-              style={{ width: '100%', padding: '12px', fontSize: '0.95rem', fontWeight: 600, marginTop: 4 }}
+              disabled={isLoggingIn || lockoutSeconds > 0}
+              style={{
+                width: '100%',
+                padding: '12px',
+                fontSize: '0.95rem',
+                fontWeight: 600,
+                marginTop: 4,
+                opacity: lockoutSeconds > 0 ? 0.5 : 1,
+                cursor: lockoutSeconds > 0 ? 'not-allowed' : 'pointer',
+              }}
             >
-              {isLoggingIn ? 'Đang xác thực bảo mật...' : 'Đăng Nhập Vào Kho'}
+              {lockoutSeconds > 0
+                ? `⏳ Tạm khóa (${lockoutSeconds}s)`
+                : isLoggingIn
+                ? 'Đang xác thực an toàn...'
+                : '🛡️ Đăng Nhập Quản Trị'}
             </button>
           </form>
 
-          <div style={{ marginTop: 20, padding: 12, borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            <div><strong>Tài khoản quản trị viên:</strong></div>
-            <div>• Email: <code>hatranduyphat2004@gmail.com</code></div>
-            <div>• Mật khẩu: <code>Admin@123456</code></div>
+          <div style={{ marginTop: 20, textAlign: 'center', fontSize: '0.72rem', color: 'var(--text-muted)', borderTop: '1px solid var(--border-color)', paddingTop: 12 }}>
+            🔒 Phiên làm việc được mã hóa đầu cuối với Supabase Server Auth & Rate-Limiter
           </div>
         </div>
       </div>
