@@ -232,7 +232,7 @@ class InventoryService {
 
   enrichDeviceDates(dev: any): Device {
     // 1. Ngày nhập kho (Inbound / Import Date)
-    dev.inbound_date = dev.inbound_receipt?.received_date || dev.inbound_receipt?.created_at || dev.created_at;
+    dev.inbound_date = dev.inbound_date || dev.inbound_receipt?.received_date || dev.inbound_receipt?.created_at || dev.created_at;
 
     // 2. Ngày xuất kho (Outbound / Export Date)
     let outDate: string | null = null;
@@ -253,6 +253,10 @@ class InventoryService {
 
     if (!outDate && dev.customer_warranty?.start_date && (dev.owner_type === 'EXTERNAL' || dev.holder_type === 'EXTERNAL_PARTY')) {
       outDate = dev.customer_warranty.start_date;
+    }
+
+    if (!outDate && dev.outbound_date) {
+      outDate = dev.outbound_date;
     }
 
     dev.outbound_date = outDate;
@@ -1078,6 +1082,230 @@ class InventoryService {
 
     this.persistMock();
     return { success: true, message: 'Đã cập nhật chính sách bảo hành thành công' };
+  }
+
+  async updateDeviceDates(params: {
+    device_id: string;
+    inbound_date?: string; // YYYY-MM-DD
+    outbound_date?: string | null; // YYYY-MM-DD or null
+    reason: string;
+  }): Promise<{ success: boolean; message: string }> {
+    const trimmedReason = (params.reason || '').trim();
+    if (!trimmedReason || trimmedReason.length < 3) {
+      throw new Error('Vui lòng nhập lý do điều chỉnh ngày nhập / xuất kho (tối thiểu 3 ký tự).');
+    }
+
+    if (isSupabaseConfigured()) {
+      const supabase = createClient();
+      const { data: rawDev, error: devErr } = await supabase
+        .from('devices')
+        .select(`
+          *,
+          inbound_receipt:inbound_receipts(*),
+          outbound_items:outbound_items(*, outbound_receipt:outbound_receipts(*)),
+          assignments:assignments(*),
+          warranty_policies:warranty_policies(*)
+        `)
+        .eq('id', params.device_id)
+        .single();
+
+      if (devErr || !rawDev) {
+        throw new Error('Không tìm thấy thiết bị trong cơ sở dữ liệu: ' + (devErr?.message || ''));
+      }
+
+      const auditStamp = `[Sửa ngày ${new Date().toLocaleString('vi-VN')}] Lý do: ${trimmedReason}`;
+
+      // 1. Cập nhật ngày nhập kho (Inbound Date)
+      if (params.inbound_date) {
+        if (rawDev.inbound_receipt_id) {
+          const prevNotes = rawDev.inbound_receipt?.notes || '';
+          await supabase
+            .from('inbound_receipts')
+            .update({
+              received_date: params.inbound_date,
+              notes: prevNotes ? `${prevNotes}\n${auditStamp}` : auditStamp,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', rawDev.inbound_receipt_id);
+        }
+
+        // Cập nhật created_at và updated_at trên device
+        await supabase
+          .from('devices')
+          .update({
+            created_at: new Date(params.inbound_date + 'T00:00:00Z').toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', params.device_id);
+
+        // Cập nhật ngày bắt đầu bảo hành NCC nếu có
+        if (rawDev.warranty_policies && Array.isArray(rawDev.warranty_policies)) {
+          const supPol = rawDev.warranty_policies.find((p: any) => p.policy_type === 'SUPPLIER_POLICY');
+          if (supPol) {
+            await supabase
+              .from('warranty_policies')
+              .update({
+                start_date: params.inbound_date,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', supPol.id);
+          }
+        }
+      }
+
+      // 2. Cập nhật ngày xuất kho (Outbound Date)
+      if (params.outbound_date !== undefined) {
+        if (params.outbound_date) {
+          // Có ngày xuất cụ thể
+          const hasOutItem = rawDev.outbound_items && rawDev.outbound_items.length > 0;
+          if (hasOutItem) {
+            const topOut = rawDev.outbound_items[0];
+            if (topOut.outbound_receipt) {
+              const prevNotes = topOut.outbound_receipt.notes || '';
+              await supabase
+                .from('outbound_receipts')
+                .update({
+                  outbound_date: params.outbound_date,
+                  notes: prevNotes ? `${prevNotes}\n${auditStamp}` : auditStamp,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', topOut.outbound_receipt.id);
+            }
+          }
+
+          const activeAssign = rawDev.assignments?.find((a: any) => !a.checkin_date);
+          if (activeAssign) {
+            const prevNotes = activeAssign.checkout_notes || '';
+            await supabase
+              .from('assignments')
+              .update({
+                checkout_date: new Date(params.outbound_date + 'T00:00:00Z').toISOString(),
+                checkout_notes: prevNotes ? `${prevNotes}\n${auditStamp}` : auditStamp,
+              })
+              .eq('id', activeAssign.id);
+          }
+
+          // Cập nhật customer warranty policy nếu có
+          if (rawDev.warranty_policies && Array.isArray(rawDev.warranty_policies)) {
+            const cusPol = rawDev.warranty_policies.find((p: any) => p.policy_type === 'CUSTOMER_POLICY');
+            if (cusPol) {
+              await supabase
+                .from('warranty_policies')
+                .update({
+                  start_date: params.outbound_date,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', cusPol.id);
+            }
+          }
+
+          // Đảm bảo updated_at trên device để kích hoạt trigger outbox
+          await supabase
+            .from('devices')
+            .update({
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', params.device_id);
+        } else {
+          // Người dùng xóa ngày xuất (Chưa xuất kho / chuyển về kho)
+          if (rawDev.outbound_items && rawDev.outbound_items.length > 0) {
+            await supabase
+              .from('outbound_items')
+              .delete()
+              .eq('device_id', params.device_id);
+          }
+          const activeAssign = rawDev.assignments?.find((a: any) => !a.checkin_date);
+          if (activeAssign) {
+            await supabase
+              .from('assignments')
+              .update({
+                checkin_date: new Date().toISOString(),
+                checkin_notes: auditStamp,
+              })
+              .eq('id', activeAssign.id);
+          }
+
+          await supabase
+            .from('devices')
+            .update({
+              holder_type: 'INTERNAL_STORAGE',
+              owner_type: 'INTERNAL',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', params.device_id);
+        }
+      }
+
+      // Đẩy hàng đợi sheets_sync_outbox để đồng bộ sang Google Sheets
+      await supabase
+        .from('sheets_sync_outbox')
+        .upsert({
+          entity_type: 'DEVICE',
+          entity_id: params.device_id,
+          model_id: rawDev.product_id,
+          action: 'UPSERT',
+          status: 'PENDING',
+          next_retry_at: new Date().toISOString(),
+        }, { onConflict: 'entity_type,entity_id' });
+
+      return {
+        success: true,
+        message: 'Đã cập nhật ngày nhập / xuất kho và lưu vết kiểm toán thành công.',
+      };
+    }
+
+    // Mock Mode
+    const dev = this.devices.find((d) => d.id === params.device_id);
+    if (!dev) throw new Error('Không tìm thấy thiết bị');
+
+    const auditStamp = `[Sửa ngày ${new Date().toLocaleString('vi-VN')}] Lý do: ${trimmedReason}`;
+
+    if (params.inbound_date) {
+      dev.inbound_date = params.inbound_date;
+      dev.created_at = new Date(params.inbound_date + 'T00:00:00Z').toISOString();
+      if (dev.inbound_receipt) {
+        dev.inbound_receipt.received_date = params.inbound_date;
+        dev.inbound_receipt.notes = dev.inbound_receipt.notes ? `${dev.inbound_receipt.notes}\n${auditStamp}` : auditStamp;
+      }
+      if (dev.supplier_warranty) {
+        dev.supplier_warranty.start_date = params.inbound_date;
+      }
+    }
+
+    if (params.outbound_date !== undefined) {
+      dev.outbound_date = params.outbound_date;
+      if (params.outbound_date) {
+        if (dev.outbound_receipt) {
+          dev.outbound_receipt.outbound_date = params.outbound_date;
+          dev.outbound_receipt.notes = dev.outbound_receipt.notes ? `${dev.outbound_receipt.notes}\n${auditStamp}` : auditStamp;
+        }
+        if (dev.active_assignment) {
+          dev.active_assignment.checkout_date = new Date(params.outbound_date + 'T00:00:00Z').toISOString();
+          dev.active_assignment.checkout_notes = dev.active_assignment.checkout_notes ? `${dev.active_assignment.checkout_notes}\n${auditStamp}` : auditStamp;
+        }
+        if (dev.customer_warranty) {
+          dev.customer_warranty.start_date = params.outbound_date;
+        }
+      } else {
+        dev.outbound_date = null;
+        dev.outbound_receipt = null;
+        dev.outbound_items = [];
+        if (dev.active_assignment) {
+          dev.active_assignment = null;
+        }
+        dev.holder_type = 'INTERNAL_STORAGE';
+        dev.owner_type = 'INTERNAL';
+      }
+    }
+
+    dev.updated_at = new Date().toISOString();
+    this.enrichDeviceDates(dev);
+    this.persistMock();
+
+    return {
+      success: true,
+      message: 'Đã cập nhật ngày nhập / xuất kho và lưu vết kiểm toán thành công.',
+    };
   }
 }
 

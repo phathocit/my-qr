@@ -140,7 +140,7 @@ function enrichDeviceForSheets(rawDev: any): Device {
   }
 
   // 1. Ngày nhập kho
-  dev.inbound_date = rawDev.inbound_receipt?.received_date || rawDev.inbound_receipt?.created_at || rawDev.created_at;
+  dev.inbound_date = rawDev.inbound_date || rawDev.inbound_receipt?.received_date || rawDev.inbound_receipt?.created_at || rawDev.created_at;
 
   // 2. Ngày xuất kho
   let outDate: string | null = null;
@@ -161,6 +161,10 @@ function enrichDeviceForSheets(rawDev: any): Device {
 
   if (!outDate && dev.customer_warranty?.start_date && (dev.owner_type === 'EXTERNAL' || dev.holder_type === 'EXTERNAL_PARTY')) {
     outDate = dev.customer_warranty.start_date;
+  }
+
+  if (!outDate && rawDev.outbound_date) {
+    outDate = rawDev.outbound_date;
   }
 
   dev.outbound_date = outDate;

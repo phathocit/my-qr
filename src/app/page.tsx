@@ -21,6 +21,20 @@ function formatDateDisplay(dStr?: string | null): string {
   }
 }
 
+function toDateInputValue(dStr?: string | null): string {
+  if (!dStr) return '';
+  try {
+    const d = new Date(dStr);
+    if (isNaN(d.getTime())) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  } catch {
+    return '';
+  }
+}
+
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<Tab>('search');
   const [isMock, setIsMock] = useState(true);
@@ -129,6 +143,16 @@ export default function HomePage() {
   const [editCustomerStartDate, setEditCustomerStartDate] = useState('');
   const [editCustomerEndDate, setEditCustomerEndDate] = useState('');
   const [editCustomerNotes, setEditCustomerNotes] = useState('');
+
+  // Edit Dates Modal State
+  const [editDatesModalOpen, setEditDatesModalOpen] = useState(false);
+  const [editDatesDevice, setEditDatesDevice] = useState<Device | null>(null);
+  const [editInboundDate, setEditInboundDate] = useState<string>('');
+  const [editHasOutboundDate, setEditHasOutboundDate] = useState<boolean>(false);
+  const [editOutboundDate, setEditOutboundDate] = useState<string>('');
+  const [editDatesReason, setEditDatesReason] = useState<string>('');
+  const [editDatesError, setEditDatesError] = useState<string>('');
+  const [savingDates, setSavingDates] = useState(false);
 
   // Inbound Warranty Policy State
   const [inboundHasWarranty, setInboundHasWarranty] = useState(true);
@@ -609,6 +633,72 @@ export default function HomePage() {
       showNotice(err.message || 'Lỗi khi cập nhật chính sách bảo hành', 'error');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openEditDatesModal = (dev: Device) => {
+    setEditDatesDevice(dev);
+    const currentIn = dev.inbound_date || dev.inbound_receipt?.received_date || dev.created_at;
+    setEditInboundDate(toDateInputValue(currentIn) || new Date().toISOString().slice(0, 10));
+
+    const currentOut = dev.outbound_date;
+    if (currentOut) {
+      setEditHasOutboundDate(true);
+      setEditOutboundDate(toDateInputValue(currentOut));
+    } else {
+      setEditHasOutboundDate(false);
+      setEditOutboundDate(new Date().toISOString().slice(0, 10));
+    }
+
+    setEditDatesReason('');
+    setEditDatesError('');
+    setEditDatesModalOpen(true);
+  };
+
+  const handleSaveDeviceDates = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editDatesDevice) return;
+    if (!editDatesReason.trim() || editDatesReason.trim().length < 3) {
+      setEditDatesError('Vui lòng nhập lý do điều chỉnh ngày nhập / xuất kho (bắt buộc, tối thiểu 3 ký tự).');
+      return;
+    }
+
+    setSavingDates(true);
+    setEditDatesError('');
+    try {
+      const targetOutDate = editHasOutboundDate && editOutboundDate ? editOutboundDate : null;
+      const res = await inventoryService.updateDeviceDates({
+        device_id: editDatesDevice.id,
+        inbound_date: editInboundDate || undefined,
+        outbound_date: targetOutDate,
+        reason: editDatesReason.trim(),
+      });
+
+      showNotice(res.message, 'success');
+      setEditDatesModalOpen(false);
+
+      // Kích hoạt đồng bộ Google Sheets nền
+      fetch('/api/sync/sheets?action=sync_pending', { method: 'POST' }).catch(() => {});
+      fetch('/api/sync/sheets?action=reconcile_model_tabs', { method: 'POST' }).catch(() => {});
+
+      await refreshData();
+
+      // Cập nhật selectedDevice nếu đang xem
+      if (selectedDevice && selectedDevice.id === editDatesDevice.id) {
+        setSelectedDevice((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            inbound_date: editInboundDate || prev.inbound_date,
+            outbound_date: targetOutDate,
+            updated_at: new Date().toISOString(),
+          };
+        });
+      }
+    } catch (err: any) {
+      setEditDatesError(err.message || 'Lỗi khi cập nhật ngày nhập / xuất kho');
+    } finally {
+      setSavingDates(false);
     }
   };
 
@@ -1543,9 +1633,20 @@ export default function HomePage() {
 
                 {/* Lịch sử Ngày Nhập / Xuất kho */}
                 <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span>📅</span>
-                    <span>Theo dõi Ngày Nhập / Xuất kho:</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>📅</span>
+                      <span>Theo dõi Ngày Nhập / Xuất kho:</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ padding: '3px 8px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                      onClick={() => openEditDatesModal(selectedDevice)}
+                      title="Sửa hoặc cập nhật ngày nhập / xuất kho kèm lý do"
+                    >
+                      ✏️ Sửa ngày Nhập / Xuất
+                    </button>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                     {/* Ngày Nhập */}
@@ -2937,17 +3038,29 @@ export default function HomePage() {
                                   </div>
                                 </div>
 
-                                {/* Nút xem chi tiết */}
-                                <button
-                                  className="btn btn-secondary"
-                                  style={{ padding: '4px 10px', minHeight: 28, fontSize: '0.74rem', flexShrink: 0 }}
-                                  onClick={() => {
-                                    setSelectedDevice(dev);
-                                    setActiveTab('search');
-                                  }}
-                                >
-                                  🔍 Tra cứu
-                                </button>
+                                {/* Nút hành động */}
+                                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    style={{ padding: '4px 8px', minHeight: 28, fontSize: '0.74rem', display: 'flex', alignItems: 'center', gap: 3 }}
+                                    onClick={() => openEditDatesModal(dev)}
+                                    title="Sửa ngày nhập / xuất kho kèm lý do"
+                                  >
+                                    ✏️ Sửa ngày
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    style={{ padding: '4px 10px', minHeight: 28, fontSize: '0.74rem' }}
+                                    onClick={() => {
+                                      setSelectedDevice(dev);
+                                      setActiveTab('search');
+                                    }}
+                                  >
+                                    🔍 Tra cứu
+                                  </button>
+                                </div>
                               </div>
 
                               {/* Badges trạng thái */}
@@ -3737,6 +3850,194 @@ export default function HomePage() {
                   disabled={loading}
                 >
                   {loading ? 'Đang lưu...' : '💾 Lưu chính sách bảo hành'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Cập nhật Ngày Nhập / Xuất kho kèm lý do bắt buộc */}
+      {editDatesModalOpen && editDatesDevice && (
+        <div className="modal-overlay" onClick={() => !savingDates && setEditDatesModalOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>✏️</span>
+                  <span>Điều chỉnh ngày Nhập / Xuất kho</span>
+                </h3>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                  Mã QL: <strong style={{ color: 'var(--text-main)' }}>{editDatesDevice.management_code}</strong>
+                  {editDatesDevice.serial_number ? ` • SN: ${editDatesDevice.serial_number}` : ''}
+                  {editDatesDevice.product?.name ? ` • ${editDatesDevice.product.name}` : ''}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !savingDates && setEditDatesModalOpen(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  lineHeight: 1,
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleSaveDeviceDates} style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 8 }}>
+              {/* Box Ngày Nhập */}
+              <div
+                style={{
+                  background: 'rgba(59, 130, 246, 0.06)',
+                  padding: 14,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid rgba(59, 130, 246, 0.22)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <label style={{ fontSize: '0.85rem', fontWeight: 700, color: '#93c5fd', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>📥</span>
+                  <span>Ngày nhập kho:</span>
+                </label>
+                <input
+                  type="date"
+                  className="form-control"
+                  style={{ background: 'var(--bg-card)' }}
+                  value={editInboundDate}
+                  onChange={(e) => setEditInboundDate(e.target.value)}
+                  required
+                />
+                <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
+                  Mốc ngày thiết bị được tạo hoặc nhận vào hệ thống kho.
+                </div>
+              </div>
+
+              {/* Box Ngày Xuất */}
+              <div
+                style={{
+                  background: editHasOutboundDate ? 'rgba(168, 85, 247, 0.06)' : 'rgba(34, 197, 94, 0.06)',
+                  padding: 14,
+                  borderRadius: 'var(--radius-sm)',
+                  border: editHasOutboundDate ? '1px solid rgba(168, 85, 247, 0.22)' : '1px solid rgba(34, 197, 94, 0.22)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <label style={{ fontSize: '0.85rem', fontWeight: 700, color: editHasOutboundDate ? '#c084fc' : '#86efac', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>📤</span>
+                    <span>Ngày xuất kho:</span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', cursor: 'pointer', userSelect: 'none' }}>
+                    <input
+                      type="checkbox"
+                      checked={editHasOutboundDate}
+                      onChange={(e) => {
+                        setEditHasOutboundDate(e.target.checked);
+                        if (e.target.checked && !editOutboundDate) {
+                          setEditOutboundDate(new Date().toISOString().slice(0, 10));
+                        }
+                      }}
+                    />
+                    <span>{editHasOutboundDate ? 'Đã xuất kho' : 'Chưa xuất kho (Trong kho)'}</span>
+                  </label>
+                </div>
+
+                {editHasOutboundDate ? (
+                  <div>
+                    <input
+                      type="date"
+                      className="form-control"
+                      style={{ background: 'var(--bg-card)' }}
+                      value={editOutboundDate}
+                      onChange={(e) => setEditOutboundDate(e.target.value)}
+                      required={editHasOutboundDate}
+                    />
+                    <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                      Mốc ngày thiết bị rời kho (bán hàng, bàn giao hoặc cho mượn).
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--success)', fontStyle: 'italic', padding: '4px 0' }}>
+                    ✓ Thiết bị đang ở trạng thái tồn kho sẵn sàng (Chưa xuất).
+                  </div>
+                )}
+              </div>
+
+              {/* Lý do sửa đổi - BẮT BUỘC */}
+              <div
+                style={{
+                  background: 'rgba(239, 68, 68, 0.04)',
+                  padding: 14,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid rgba(239, 68, 68, 0.25)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <label style={{ fontSize: '0.85rem', fontWeight: 700, color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>📝</span>
+                  <span>Lý do điều chỉnh / sửa đổi (* Bắt buộc):</span>
+                </label>
+                <textarea
+                  className="form-control"
+                  rows={3}
+                  style={{ background: 'var(--bg-card)', resize: 'vertical' }}
+                  placeholder="Ghi rõ nguyên nhân sửa đổi (VD: Nhập nhầm theo hóa đơn, đối soát chứng từ giao nhận, khách hàng dời ngày lấy máy, v.v...)"
+                  value={editDatesReason}
+                  onChange={(e) => {
+                    setEditDatesReason(e.target.value);
+                    if (editDatesError) setEditDatesError('');
+                  }}
+                  required
+                />
+                <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
+                  🔒 Bắt buộc ghi lý do để lưu vết kiểm toán (Audit Trail) và chống sửa đổi tùy tiện.
+                </div>
+              </div>
+
+              {/* Error message */}
+              {editDatesError && (
+                <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid var(--danger)', borderRadius: 8, color: '#fca5a5', fontSize: '0.8rem' }}>
+                  ⚠️ {editDatesError}
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 4 }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setEditDatesModalOpen(false)}
+                  disabled={savingDates}
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={savingDates || !editDatesReason.trim()}
+                  style={{ minWidth: 170 }}
+                >
+                  {savingDates ? (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span className="spinner" style={{ width: 14, height: 14 }} />
+                      Đang lưu & đồng bộ...
+                    </span>
+                  ) : (
+                    '💾 Lưu & Đồng bộ Sheets'
+                  )}
                 </button>
               </div>
             </form>
