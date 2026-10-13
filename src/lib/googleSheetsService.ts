@@ -83,6 +83,8 @@ export const DEVICE_HEADERS = [
   'device_id',
   'Mã quản lý',
   'Serial Number (SN)',
+  'Ngày nhập kho',
+  'Ngày xuất kho',
   'Chủ sở hữu',
   'Bên đang giữ / Vị trí',
   'Tình trạng kỹ thuật',
@@ -345,6 +347,15 @@ export class GoogleSheetsService {
     // Tìm xem đã có tab trùng tên chưa
     const existing = sheetList.find((s) => s.properties?.title === baseTitle);
     if (existing && existing.properties?.sheetId !== undefined && existing.properties.sheetId !== null) {
+      // Cập nhật lại hàng tiêu đề để luôn đồng bộ các cột mới (A1:M1)
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `'${baseTitle}'!A1:M1`,
+        valueInputOption: 'RAW',
+        requestBody: {
+          values: [DEVICE_HEADERS],
+        },
+      });
       return { sheetId: existing.properties.sheetId, tabTitle: baseTitle };
     }
 
@@ -376,10 +387,10 @@ export class GoogleSheetsService {
 
     const newSheetId = addRes.data.replies?.[0]?.addSheet?.properties?.sheetId ?? 0;
 
-    // Ghi hàng tiêu đề cho tab Model
+    // Ghi hàng tiêu đề cho tab Model (A1:M1)
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `'${uniqueTitle}'!A1:K1`,
+      range: `'${uniqueTitle}'!A1:M1`,
       valueInputOption: 'RAW',
       requestBody: {
         values: [DEVICE_HEADERS],
@@ -420,10 +431,36 @@ export class GoogleSheetsService {
     // Link an toàn trỏ đến trang authenticated evidence theo sự kiện & thiết bị
     const evidenceUrl = `${appUrl}/evidence?entity_type=DEVICE_EVENT&device_id=${device.id}`;
 
+    // Xử lý format ngày nhập kho & ngày xuất kho
+    const formatD = (dStr?: string | null): string => {
+      if (!dStr) return '';
+      try {
+        const d = new Date(dStr);
+        if (isNaN(d.getTime())) return dStr;
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        return `${day}/${month}/${d.getFullYear()}`;
+      } catch {
+        return dStr;
+      }
+    };
+
+    const inDateVal = device.inbound_date || device.inbound_receipt?.received_date || device.inbound_receipt?.created_at || device.created_at;
+    const formattedInDate = inDateVal ? formatD(inDateVal) : '';
+
+    let formattedOutDate = 'Chưa xuất';
+    if (device.outbound_date) {
+      formattedOutDate = formatD(device.outbound_date);
+    } else if (device.holder_type === 'EXTERNAL_PARTY' && device.active_assignment?.checkout_date) {
+      formattedOutDate = formatD(device.active_assignment.checkout_date);
+    }
+
     return [
       sanitizeCellValue(device.id),
       sanitizeCellValue(device.management_code),
       sanitizeCellValue(device.serial_number || ''),
+      sanitizeCellValue(formattedInDate),
+      sanitizeCellValue(formattedOutDate),
       sanitizeCellValue(owner),
       sanitizeCellValue(holder),
       sanitizeCellValue(condition),
@@ -469,7 +506,7 @@ export class GoogleSheetsService {
     if (matchedRowIndex > 0) {
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `'${tabTitle}'!A${matchedRowIndex}:K${matchedRowIndex}`,
+        range: `'${tabTitle}'!A${matchedRowIndex}:M${matchedRowIndex}`,
         valueInputOption: 'RAW',
         requestBody: {
           values: [rowData],
@@ -479,7 +516,7 @@ export class GoogleSheetsService {
     } else {
       await sheets.spreadsheets.values.append({
         spreadsheetId,
-        range: `'${tabTitle}'!A:K`,
+        range: `'${tabTitle}'!A:M`,
         valueInputOption: 'RAW',
         insertDataOption: 'INSERT_ROWS',
         requestBody: {
@@ -526,7 +563,7 @@ export class GoogleSheetsService {
       // Đọc các dòng hiện tại của tab
       const currentTabRes = await sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: `'${tabTitle}'!A:K`,
+        range: `'${tabTitle}'!A:M`,
       });
 
       const currentRows = currentTabRes.data.values || [];
@@ -546,7 +583,7 @@ export class GoogleSheetsService {
         if (devRowMap.has(dev.id)) {
           const rowIndex = devRowMap.get(dev.id)!;
           updateBatches.push({
-            range: `'${tabTitle}'!A${rowIndex}:K${rowIndex}`,
+            range: `'${tabTitle}'!A${rowIndex}:M${rowIndex}`,
             values: [rowData],
           });
           updatedCount++;
@@ -569,7 +606,7 @@ export class GoogleSheetsService {
       if (appendRows.length > 0) {
         await sheets.spreadsheets.values.append({
           spreadsheetId,
-          range: `'${tabTitle}'!A:K`,
+          range: `'${tabTitle}'!A:M`,
           valueInputOption: 'RAW',
           insertDataOption: 'INSERT_ROWS',
           requestBody: {

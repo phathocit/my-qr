@@ -8,6 +8,19 @@ import ScannerModal from '@/components/ScannerModal';
 
 type Tab = 'search' | 'inbound' | 'outbound' | 'warranty' | 'inventory';
 
+function formatDateDisplay(dStr?: string | null): string {
+  if (!dStr) return '-';
+  try {
+    const d = new Date(dStr);
+    if (isNaN(d.getTime())) return dStr;
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    return `${day}/${month}/${d.getFullYear()}`;
+  } catch {
+    return dStr;
+  }
+}
+
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<Tab>('search');
   const [isMock, setIsMock] = useState(true);
@@ -1333,6 +1346,86 @@ export default function HomePage() {
                   </div>
                 </div>
 
+                {/* Lịch sử Ngày Nhập / Xuất kho */}
+                <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>📅</span>
+                    <span>Theo dõi Ngày Nhập / Xuất kho:</span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    {/* Ngày Nhập */}
+                    <div
+                      style={{
+                        background: 'rgba(59, 130, 246, 0.08)',
+                        padding: '10px 12px',
+                        borderRadius: 10,
+                        border: '1px solid rgba(59, 130, 246, 0.22)',
+                      }}
+                    >
+                      <div style={{ fontSize: '0.72rem', color: '#93c5fd', fontWeight: 700, letterSpacing: '0.02em', marginBottom: 3 }}>
+                        📥 NGÀY NHẬP KHO
+                      </div>
+                      <div style={{ fontSize: '1rem', fontWeight: 700, color: '#f8fafc' }}>
+                        {formatDateDisplay(selectedDevice.inbound_date || selectedDevice.inbound_receipt?.received_date || selectedDevice.created_at)}
+                      </div>
+                      <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 3 }}>
+                        {selectedDevice.inbound_receipt?.code
+                          ? `Phiếu: ${selectedDevice.inbound_receipt.code}`
+                          : 'Đăng ký vào hệ thống'}
+                        {selectedDevice.inbound_receipt?.supplier?.name
+                          ? ` • NCC: ${selectedDevice.inbound_receipt.supplier.name}`
+                          : ''}
+                      </div>
+                    </div>
+
+                    {/* Ngày Xuất */}
+                    <div
+                      style={{
+                        background: selectedDevice.outbound_date
+                          ? 'rgba(168, 85, 247, 0.08)'
+                          : 'rgba(34, 197, 94, 0.08)',
+                        padding: '10px 12px',
+                        borderRadius: 10,
+                        border: selectedDevice.outbound_date
+                          ? '1px solid rgba(168, 85, 247, 0.25)'
+                          : '1px solid rgba(34, 197, 94, 0.22)',
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: '0.72rem',
+                          color: selectedDevice.outbound_date ? '#c084fc' : '#86efac',
+                          fontWeight: 700,
+                          letterSpacing: '0.02em',
+                          marginBottom: 3,
+                        }}
+                      >
+                        📤 NGÀY XUẤT KHO
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '1rem',
+                          fontWeight: 700,
+                          color: selectedDevice.outbound_date ? '#f8fafc' : 'var(--success)',
+                        }}
+                      >
+                        {selectedDevice.outbound_date
+                          ? formatDateDisplay(selectedDevice.outbound_date)
+                          : 'Chưa xuất kho (Trong kho)'}
+                      </div>
+                      <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 3 }}>
+                        {selectedDevice.outbound_receipt?.code
+                          ? `Phiếu: ${selectedDevice.outbound_receipt.code}`
+                          : selectedDevice.active_assignment
+                          ? `Đang mượn: ${selectedDevice.active_assignment.recipient_party?.name || 'Khách/NV'}`
+                          : selectedDevice.owner_type === 'EXTERNAL'
+                          ? `Đã bàn giao: ${selectedDevice.owner_party?.name || 'Khách'}`
+                          : 'Thiết bị sẵn sàng trong kho'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* 2 Warranty Policies */}
                 <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -2604,6 +2697,20 @@ export default function HomePage() {
                                     </div>
                                     <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
                                       Mã QL: <strong>{dev.management_code}</strong>
+                                    </div>
+                                    {/* Ngày nhập / xuất kho */}
+                                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: '0.73rem', marginTop: 3 }}>
+                                      <span style={{ color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                        📥 Nhập: <strong style={{ color: '#f8fafc' }}>{formatDateDisplay(dev.inbound_date || dev.inbound_receipt?.received_date || dev.created_at)}</strong>
+                                      </span>
+                                      <span style={{ color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                        📤 Xuất:{' '}
+                                        {dev.outbound_date ? (
+                                          <strong style={{ color: '#c084fc' }}>{formatDateDisplay(dev.outbound_date)}</strong>
+                                        ) : (
+                                          <span style={{ color: 'var(--success)', fontWeight: 600 }}>Chưa xuất</span>
+                                        )}
+                                      </span>
                                     </div>
                                   </div>
                                 </div>

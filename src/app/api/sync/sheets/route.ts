@@ -123,6 +123,45 @@ export async function POST(req: Request) {
       });
     }
 
+function enrichDeviceForSheets(rawDev: any): Device {
+  const dev: Device = { ...rawDev };
+  if (rawDev.warranty_policies && Array.isArray(rawDev.warranty_policies)) {
+    dev.supplier_warranty = rawDev.warranty_policies.find((p: any) => p.policy_type === 'SUPPLIER_POLICY') || null;
+    dev.customer_warranty = rawDev.warranty_policies.find((p: any) => p.policy_type === 'CUSTOMER_POLICY') || null;
+  }
+  if (rawDev.assignments && Array.isArray(rawDev.assignments)) {
+    dev.active_assignment = rawDev.assignments.find((a: any) => !a.checkin_date) || null;
+  }
+
+  // 1. Ngày nhập kho
+  dev.inbound_date = rawDev.inbound_receipt?.received_date || rawDev.inbound_receipt?.created_at || rawDev.created_at;
+
+  // 2. Ngày xuất kho
+  let outDate: string | null = null;
+  let outReceipt = null;
+
+  if (rawDev.outbound_items && Array.isArray(rawDev.outbound_items) && rawDev.outbound_items.length > 0) {
+    const sortedOut = [...rawDev.outbound_items].sort((a: any, b: any) =>
+      new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+    );
+    const topOut = sortedOut[0];
+    outReceipt = topOut.outbound_receipt || null;
+    outDate = outReceipt?.outbound_date || outReceipt?.created_at || topOut.created_at || null;
+  }
+
+  if (!outDate && dev.active_assignment?.checkout_date) {
+    outDate = dev.active_assignment.checkout_date;
+  }
+
+  if (!outDate && dev.customer_warranty?.start_date && (dev.owner_type === 'EXTERNAL' || dev.holder_type === 'EXTERNAL_PARTY')) {
+    outDate = dev.customer_warranty.start_date;
+  }
+
+  dev.outbound_date = outDate;
+  dev.outbound_receipt = outReceipt;
+  return dev;
+}
+
     // 3. Action: Đối soát các Tab Model (Reconcile Model Tabs)
     if (action === 'reconcile_model_tabs') {
       const [prodsRes, devsRes] = await Promise.all([
@@ -132,7 +171,10 @@ export async function POST(req: Request) {
           product:products(*),
           owner_party:parties!owner_party_id(*),
           holder_party:parties!holder_party_id(*),
-          warranty_policies:warranty_policies(*)
+          warranty_policies:warranty_policies(*),
+          assignments:assignments(*, recipient_party:parties(*)),
+          inbound_receipt:inbound_receipts(*, supplier:parties(*)),
+          outbound_items:outbound_items(*, outbound_receipt:outbound_receipts(*, recipient:parties(*)))
         `),
       ]);
 
@@ -142,14 +184,7 @@ export async function POST(req: Request) {
       const products: Product[] = prodsRes.data || [];
       const rawDevices: any[] = devsRes.data || [];
 
-      const devices: Device[] = rawDevices.map((dev: any) => {
-        const enriched = { ...dev };
-        if (dev.warranty_policies && Array.isArray(dev.warranty_policies)) {
-          enriched.supplier_warranty = dev.warranty_policies.find((p: any) => p.policy_type === 'SUPPLIER_POLICY') || null;
-          enriched.customer_warranty = dev.warranty_policies.find((p: any) => p.policy_type === 'CUSTOMER_POLICY') || null;
-        }
-        return enriched;
-      });
+      const devices: Device[] = rawDevices.map((dev: any) => enrichDeviceForSheets(dev));
 
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
       const result = await googleSheetsService.reconcileModelTabs(products, devices, appUrl);
@@ -300,7 +335,10 @@ export async function POST(req: Request) {
               product:products(*),
               owner_party:parties!owner_party_id(*),
               holder_party:parties!holder_party_id(*),
-              warranty_policies:warranty_policies(*)
+              warranty_policies:warranty_policies(*),
+              assignments:assignments(*, recipient_party:parties(*)),
+              inbound_receipt:inbound_receipts(*, supplier:parties(*)),
+              outbound_items:outbound_items(*, outbound_receipt:outbound_receipts(*, recipient:parties(*)))
             `)
             .eq('id', job.entity_id)
             .single();
@@ -314,11 +352,7 @@ export async function POST(req: Request) {
             continue;
           }
 
-          const dev: Device = { ...rawDev };
-          if (rawDev.warranty_policies && Array.isArray(rawDev.warranty_policies)) {
-            dev.supplier_warranty = rawDev.warranty_policies.find((p: any) => p.policy_type === 'SUPPLIER_POLICY') || null;
-            dev.customer_warranty = rawDev.warranty_policies.find((p: any) => p.policy_type === 'CUSTOMER_POLICY') || null;
-          }
+          const dev: Device = enrichDeviceForSheets(rawDev);
 
           const product = dev.product;
           if (!product) {

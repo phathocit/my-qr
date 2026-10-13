@@ -72,6 +72,15 @@ export interface Device {
   photo_url?: string | null;
   inbound_receipt?: InboundReceipt | null;
   supplier?: Party | null;
+  inbound_date?: string | null;
+  outbound_date?: string | null;
+  outbound_receipt?: OutboundReceipt | null;
+  outbound_items?: Array<{
+    id: string;
+    receipt_id: string;
+    created_at: string;
+    outbound_receipt?: OutboundReceipt;
+  }> | null;
 }
 
 export interface Assignment {

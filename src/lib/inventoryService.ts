@@ -203,7 +203,8 @@ class InventoryService {
           evidence_photos:evidence_photos(*),
           warranty_policies:warranty_policies(*),
           assignments:assignments(*, recipient_party:parties(*)),
-          inbound_receipt:inbound_receipts(*, supplier:parties(*))
+          inbound_receipt:inbound_receipts(*, supplier:parties(*)),
+          outbound_items:outbound_items(*, outbound_receipt:outbound_receipts(*, recipient:parties(*)))
         `)
         .order('created_at', { ascending: false });
       if (!error && data) {
@@ -222,11 +223,41 @@ class InventoryService {
           if (dev.assignments && Array.isArray(dev.assignments)) {
             dev.active_assignment = dev.assignments.find((a: any) => !a.checkin_date) || null;
           }
-          return dev as Device;
+          return this.enrichDeviceDates(dev);
         });
       }
     }
-    return this.devices;
+    return this.devices.map((d) => this.enrichDeviceDates(d));
+  }
+
+  enrichDeviceDates(dev: any): Device {
+    // 1. Ngày nhập kho (Inbound / Import Date)
+    dev.inbound_date = dev.inbound_receipt?.received_date || dev.inbound_receipt?.created_at || dev.created_at;
+
+    // 2. Ngày xuất kho (Outbound / Export Date)
+    let outDate: string | null = null;
+    let outReceipt: OutboundReceipt | null = null;
+
+    if (dev.outbound_items && Array.isArray(dev.outbound_items) && dev.outbound_items.length > 0) {
+      const sortedOut = [...dev.outbound_items].sort((a: any, b: any) =>
+        new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+      );
+      const topOut = sortedOut[0];
+      outReceipt = topOut.outbound_receipt || null;
+      outDate = outReceipt?.outbound_date || outReceipt?.created_at || topOut.created_at || null;
+    }
+
+    if (!outDate && dev.active_assignment?.checkout_date) {
+      outDate = dev.active_assignment.checkout_date;
+    }
+
+    if (!outDate && dev.customer_warranty?.start_date && (dev.owner_type === 'EXTERNAL' || dev.holder_type === 'EXTERNAL_PARTY')) {
+      outDate = dev.customer_warranty.start_date;
+    }
+
+    dev.outbound_date = outDate;
+    dev.outbound_receipt = outReceipt;
+    return dev as Device;
   }
 
   async findDeviceByCode(code: string): Promise<Device | null> {
@@ -243,7 +274,8 @@ class InventoryService {
           evidence_photos:evidence_photos(*),
           warranty_policies:warranty_policies(*),
           assignments:assignments(*, recipient_party:parties(*)),
-          inbound_receipt:inbound_receipts(*, supplier:parties(*))
+          inbound_receipt:inbound_receipts(*, supplier:parties(*)),
+          outbound_items:outbound_items(*, outbound_receipt:outbound_receipts(*, recipient:parties(*)))
         `)
         .or(`management_code.eq.${trimmed},serial_number.eq.${trimmed}`)
         .single();
@@ -263,7 +295,7 @@ class InventoryService {
         if (dev.assignments && Array.isArray(dev.assignments)) {
           dev.active_assignment = dev.assignments.find((a: any) => !a.checkin_date) || null;
         }
-        return dev as Device;
+        return this.enrichDeviceDates(dev);
       }
     }
 
@@ -593,6 +625,7 @@ class InventoryService {
         dev.holder_type = 'EXTERNAL_PARTY';
         dev.holder_party_id = data.recipient_id;
       }
+      dev.outbound_date = new Date().toISOString();
     }
     this.persistMock();
     return { success: true, message: `Đã xuất ${data.device_ids.length} thiết bị thành công` };
@@ -723,6 +756,7 @@ class InventoryService {
     dev.holder_party = undefined;
     dev.technical_condition = data.condition;
     dev.active_assignment = null;
+    dev.outbound_date = null;
 
     this.persistMock();
     return { success: true, message: 'Đã thu hồi thiết bị về kho thành công' };
