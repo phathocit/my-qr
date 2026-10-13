@@ -1285,7 +1285,15 @@ export default function HomePage() {
         <div className="app-title">
           <span>📦 Quản Lý Thiết Bị CNTT</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <button
+            onClick={exportInventoryToCsv}
+            className="btn btn-primary"
+            style={{ fontSize: '0.75rem', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }}
+            title="Tải toàn bộ báo cáo tồn kho ra file Excel/CSV về máy"
+          >
+            📥 Xuất Excel
+          </button>
           <button
             onClick={() => {
               setSheetsModalOpen(true);
@@ -1402,6 +1410,80 @@ export default function HomePage() {
               <button className="btn btn-primary btn-full" onClick={() => handleSearch()} disabled={loading}>
                 {loading ? 'Đang tìm...' : 'Tra cứu hồ sơ'}
               </button>
+            </div>
+
+            {/* Quick Access Inventory & Report Shortcuts */}
+            <div className="card" style={{ padding: '12px 14px', background: 'rgba(255,255,255,0.03)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 6 }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>⚡</span>
+                  <span>Lối tắt Báo cáo & Lọc nhanh Tồn kho:</span>
+                </span>
+                <button
+                  onClick={exportInventoryToCsv}
+                  className="btn btn-primary"
+                  style={{ fontSize: '0.75rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                  title="Tải ngay báo cáo tồn kho dạng file Excel/CSV về máy tính"
+                >
+                  <span>📥</span>
+                  <span>Xuất Excel/CSV</span>
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.75rem', padding: '4px 9px', display: 'flex', alignItems: 'center', gap: 4 }}
+                  onClick={() => {
+                    setInventoryFilter('THIS_MONTH');
+                    setActiveTab('inventory');
+                  }}
+                  title="Xem các máy nhập kho trong tháng này"
+                >
+                  <span>📅</span>
+                  <span>Nhập tháng này</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.75rem', padding: '4px 9px', display: 'flex', alignItems: 'center', gap: 4 }}
+                  onClick={() => {
+                    setInventoryFilter('STORAGE');
+                    setActiveTab('inventory');
+                  }}
+                  title="Xem các máy còn trong kho chưa xuất"
+                >
+                  <span>🟢</span>
+                  <span>Chưa xuất (Tại kho)</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.75rem', padding: '4px 9px', display: 'flex', alignItems: 'center', gap: 4 }}
+                  onClick={() => {
+                    setInventoryFilter('EXPORTED');
+                    setActiveTab('inventory');
+                  }}
+                  title="Xem các máy đã xuất kho"
+                >
+                  <span>🟣</span>
+                  <span>Đã xuất kho</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.75rem', padding: '4px 9px', display: 'flex', alignItems: 'center', gap: 4 }}
+                  onClick={() => {
+                    setInventoryFilter('ALL');
+                    setActiveTab('inventory');
+                  }}
+                  title="Mở toàn bộ danh sách tồn kho theo Model"
+                >
+                  <span>📦</span>
+                  <span>Xem toàn bộ tồn kho ({devices.length})</span>
+                </button>
+              </div>
             </div>
 
             {/* Device Detail Card */}
