@@ -241,6 +241,7 @@ export default function ScannerModal({
   const isDecodingRef = useRef(false);
   const isHandlingDetectionRef = useRef(false);
   const animationFrameRef = useRef<number | null>(null);
+  const lastDetectedCodeRef = useRef<{ code: string; timestamp: number } | null>(null);
 
   // Timers đo lường độc lập
   const scanStartTimestampRef = useRef<number>(0);
@@ -308,14 +309,23 @@ export default function ScannerModal({
   const onCodeFound = useCallback(
     (code: string, format?: string, exactDecodedPhoto?: string) => {
       if (isHandlingDetectionRef.current) return;
-      isHandlingDetectionRef.current = true;
-      setScanIdleSeconds(0);
 
       const trimmed = code.trim();
-      if (!trimmed) {
-        isHandlingDetectionRef.current = false;
+      if (!trimmed) return;
+
+      // 1. Chống quét lặp lại liên tục cùng 1 mã khi người dùng đang giữ máy tại chỗ (cooldown 1.5s cho cùng 1 mã)
+      const now = Date.now();
+      if (
+        lastDetectedCodeRef.current &&
+        lastDetectedCodeRef.current.code.toLowerCase() === trimmed.toLowerCase() &&
+        now - lastDetectedCodeRef.current.timestamp < 1500
+      ) {
         return;
       }
+      lastDetectedCodeRef.current = { code: trimmed, timestamp: now };
+
+      isHandlingDetectionRef.current = true;
+      setScanIdleSeconds(0);
 
       // Ghi nhận thời gian từ khi mã nằm rõ trong khung đến khi decode thành công
       const timeToDetect =
@@ -342,7 +352,7 @@ export default function ScannerModal({
             setContinuousToast(null);
             scanStartTimestampRef.current = performance.now();
             isHandlingDetectionRef.current = false;
-          }, 900);
+          }, 600);
           return prev;
         }
 
@@ -356,12 +366,12 @@ export default function ScannerModal({
         const updated = [newItem, ...prev];
         setContinuousToast(`✓ Đã quét: ${trimmed} (${updated.length} mã)`);
 
-        // Cooldown siêu nhạy 400ms: Sẵn sàng quét mã tiếp theo
+        // Cooldown siêu nhạy 350ms: Sẵn sàng quét mã tiếp theo
         setTimeout(() => {
           setContinuousToast(null);
           scanStartTimestampRef.current = performance.now();
           isHandlingDetectionRef.current = false;
-        }, 400);
+        }, 350);
 
         return updated;
       });
@@ -426,6 +436,7 @@ export default function ScannerModal({
   const startScanLoop = useCallback(async () => {
     scanLoopActiveRef.current = true;
     isDecodingRef.current = false;
+    isHandlingDetectionRef.current = false;
 
     // 1. Khởi tạo WASM module
     const wasmResult = await getOrPreloadWasm();
@@ -447,145 +458,157 @@ export default function ScannerModal({
     const FRAME_PACING_MS = 20;
 
     const processFrame = async () => {
-      if (!scanLoopActiveRef.current || isHandlingDetectionRef.current) return;
+      // Luôn bảo đảm vòng lặp RAF sống chừng nào modal còn mở
+      if (!scanLoopActiveRef.current) return;
+
+      const scheduleNextFrame = () => {
+        if (scanLoopActiveRef.current) {
+          animationFrameRef.current = requestAnimationFrame(processFrame);
+        }
+      };
+
+      // Nếu đang trong cooldown giữa 2 lần quét: tiếp tục duy trì nhịp RAF mà không decode
+      if (isHandlingDetectionRef.current || isDecodingRef.current) {
+        scheduleNextFrame();
+        return;
+      }
 
       const video = videoRef.current;
       const now = performance.now();
 
       if (
-        video &&
-        video.readyState >= 2 &&
-        !video.paused &&
-        !isDecodingRef.current &&
-        now - lastFrameTime >= FRAME_PACING_MS
+        !video ||
+        video.readyState < 2 ||
+        video.paused ||
+        now - lastFrameTime < FRAME_PACING_MS
       ) {
-        lastFrameTime = now;
-        isDecodingRef.current = true;
-        totalFrames++;
-        framesInSecondRef.current++;
-
-        if (now - lastFpsTimeRef.current >= 1000) {
-          metricsRef.current.fps = framesInSecondRef.current;
-          metricsRef.current.totalFramesScanned = totalFrames;
-          framesInSecondRef.current = 0;
-          lastFpsTimeRef.current = now;
-        }
-
-        try {
-          const vw = video.videoWidth;
-          const vh = video.videoHeight;
-
-          if (vw > 0 && vh > 0) {
-            metricsRef.current.actualResolution = `${vw}x${vh}`;
-
-            // ── BƯỚC 1: HARDWARE NATIVE BARCODE DETECTOR (NẾU HỖ TRỢ TRÊN THIẾT BỊ) ──
-            if (nativeBarcodeDetector) {
-              try {
-                const tNativeStart = performance.now();
-                const detections = await nativeBarcodeDetector.detect(video);
-                if (detections && detections.length > 0 && detections[0]?.rawValue) {
-                  const detectDuration = Math.round((performance.now() - tNativeStart) * 10) / 10;
-                  metricsRef.current.decodeTimeMs = detectDuration;
-                  metricsRef.current.activeGear = 'fast';
-
-                  canvas.width = Math.min(vw, 1280);
-                  canvas.height = Math.round((canvas.width / vw) * vh);
-                  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                  const exactPhoto = canvas.toDataURL('image/jpeg', 0.85);
-
-                  onCodeFound(detections[0].rawValue, detections[0].format || 'BARCODE', exactPhoto);
-                  return;
-                }
-              } catch {
-                // Tiếp tục fallback sang WASM bên dưới
-              }
-            }
-
-            // ── BƯỚC 2: ZXING C++ WASM ENGINE (DUAL-PASS: FULL FRAME + CENTER HIGH-RES) ──
-            if (readBarcodesFromImageData) {
-              const tCropStart = performance.now();
-              const roi = calculateExactRoi();
-              let targetW: number;
-              let targetH: number;
-
-              // Luân phiên pass:
-              // - Pass Full Frame (Even): Quét toàn bộ khung camera, không bao giờ bị cắt cụt vạch
-              // - Pass Center High-Res (Odd): Độ phân giải 1:1 gốc cho tem số seri cực nhỏ
-              const isCenterPass = zoomLevel > 1 || (totalFrames % 2 === 0 && roi !== null);
-
-              if (zoomLevel > 1) {
-                const cropW = Math.round(vw * 0.55);
-                const cropH = Math.round(vh * 0.55);
-                const cropX = Math.round((vw - cropW) / 2);
-                const cropY = Math.round((vh - cropH) / 2);
-                targetW = cropW;
-                targetH = cropH;
-                if (canvas.width !== targetW || canvas.height !== targetH) {
-                  canvas.width = targetW;
-                  canvas.height = targetH;
-                }
-                ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH);
-              } else if (isCenterPass && roi) {
-                targetW = roi.cropW;
-                targetH = roi.cropH;
-                if (canvas.width !== targetW || canvas.height !== targetH) {
-                  canvas.width = targetW;
-                  canvas.height = targetH;
-                }
-                ctx.drawImage(video, roi.cropX, roi.cropY, roi.cropW, roi.cropH, 0, 0, targetW, targetH);
-              } else {
-                targetW = Math.min(vw, 1280);
-                targetH = Math.round((targetW / vw) * vh);
-                if (canvas.width !== targetW || canvas.height !== targetH) {
-                  canvas.width = targetW;
-                  canvas.height = targetH;
-                }
-                ctx.drawImage(video, 0, 0, targetW, targetH);
-              }
-
-              const imageData = ctx.getImageData(0, 0, targetW, targetH);
-              const cropDuration = Math.round((performance.now() - tCropStart) * 10) / 10;
-              metricsRef.current.cropTimeMs = cropDuration;
-
-              const elapsedSinceStart = performance.now() - scanStartTimestampRef.current;
-              const useDeepGear = elapsedSinceStart > 300 || totalFrames % 3 === 0;
-              metricsRef.current.activeGear = useDeepGear ? 'deep' : 'fast';
-
-              const tDecodeStart = performance.now();
-              const results = await readBarcodesFromImageData(imageData, {
-                formats: ALL_COMMON_FORMATS,
-                tryHarder: true,
-                tryRotate: true,
-                tryInvert: useDeepGear,
-                tryDownscale: true,
-                binarizer: totalFrames % 2 === 0 ? 'LocalAverage' : 'GlobalHistogram',
-                maxNumberOfSymbols: 1,
-              });
-
-              const decodeDuration = Math.round((performance.now() - tDecodeStart) * 10) / 10;
-              metricsRef.current.decodeTimeMs = decodeDuration;
-
-              if (now - lastTelemetrySyncRef.current >= 400) {
-                lastTelemetrySyncRef.current = now;
-                setTelemetry({ ...metricsRef.current });
-              }
-
-              if (results && results.length > 0 && results[0]?.text) {
-                const exactPhoto = canvas.toDataURL('image/jpeg', 0.85);
-                onCodeFound(results[0].text, results[0].format, exactPhoto);
-                return;
-              }
-            }
-          }
-        } catch {
-          // Bỏ qua lỗi frame đơn lẻ
-        } finally {
-          isDecodingRef.current = false;
-        }
+        scheduleNextFrame();
+        return;
       }
 
-      if (scanLoopActiveRef.current && !isHandlingDetectionRef.current) {
-        animationFrameRef.current = requestAnimationFrame(processFrame);
+      lastFrameTime = now;
+      isDecodingRef.current = true;
+      totalFrames++;
+      framesInSecondRef.current++;
+
+      if (now - lastFpsTimeRef.current >= 1000) {
+        metricsRef.current.fps = framesInSecondRef.current;
+        metricsRef.current.totalFramesScanned = totalFrames;
+        framesInSecondRef.current = 0;
+        lastFpsTimeRef.current = now;
+      }
+
+      try {
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+
+        if (vw > 0 && vh > 0) {
+          metricsRef.current.actualResolution = `${vw}x${vh}`;
+
+          // ── BƯỚC 1: HARDWARE NATIVE BARCODE DETECTOR (NẾU HỖ TRỢ TRÊN THIẾT BỊ) ──
+          if (nativeBarcodeDetector) {
+            try {
+              const tNativeStart = performance.now();
+              const detections = await nativeBarcodeDetector.detect(video);
+              if (detections && detections.length > 0 && detections[0]?.rawValue) {
+                const detectDuration = Math.round((performance.now() - tNativeStart) * 10) / 10;
+                metricsRef.current.decodeTimeMs = detectDuration;
+                metricsRef.current.activeGear = 'fast';
+
+                canvas.width = Math.min(vw, 1280);
+                canvas.height = Math.round((canvas.width / vw) * vh);
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const exactPhoto = canvas.toDataURL('image/jpeg', 0.85);
+
+                onCodeFound(detections[0].rawValue, detections[0].format || 'BARCODE', exactPhoto);
+                return;
+              }
+            } catch {
+              // Tiếp tục fallback sang WASM bên dưới
+            }
+          }
+
+          // ── BƯỚC 2: ZXING C++ WASM ENGINE (DUAL-PASS: FULL FRAME + CENTER HIGH-RES) ──
+          if (readBarcodesFromImageData) {
+            const tCropStart = performance.now();
+            const roi = calculateExactRoi();
+            let targetW: number;
+            let targetH: number;
+
+            // Luân phiên pass:
+            // - Pass Full Frame (Even): Quét toàn bộ khung camera, không bao giờ bị cắt cụt vạch
+            // - Pass Center High-Res (Odd): Độ phân giải 1:1 gốc cho tem số seri cực nhỏ
+            const isCenterPass = zoomLevel > 1 || (totalFrames % 2 === 0 && roi !== null);
+
+            if (zoomLevel > 1) {
+              const cropW = Math.round(vw * 0.55);
+              const cropH = Math.round(vh * 0.55);
+              const cropX = Math.round((vw - cropW) / 2);
+              const cropY = Math.round((vh - cropH) / 2);
+              targetW = cropW;
+              targetH = cropH;
+              if (canvas.width !== targetW || canvas.height !== targetH) {
+                canvas.width = targetW;
+                canvas.height = targetH;
+              }
+              ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH);
+            } else if (isCenterPass && roi) {
+              targetW = roi.cropW;
+              targetH = roi.cropH;
+              if (canvas.width !== targetW || canvas.height !== targetH) {
+                canvas.width = targetW;
+                canvas.height = targetH;
+              }
+              ctx.drawImage(video, roi.cropX, roi.cropY, roi.cropW, roi.cropH, 0, 0, targetW, targetH);
+            } else {
+              targetW = Math.min(vw, 1280);
+              targetH = Math.round((targetW / vw) * vh);
+              if (canvas.width !== targetW || canvas.height !== targetH) {
+                canvas.width = targetW;
+                canvas.height = targetH;
+              }
+              ctx.drawImage(video, 0, 0, targetW, targetH);
+            }
+
+            const imageData = ctx.getImageData(0, 0, targetW, targetH);
+            const cropDuration = Math.round((performance.now() - tCropStart) * 10) / 10;
+            metricsRef.current.cropTimeMs = cropDuration;
+
+            const elapsedSinceStart = performance.now() - scanStartTimestampRef.current;
+            const useDeepGear = elapsedSinceStart > 300 || totalFrames % 3 === 0;
+            metricsRef.current.activeGear = useDeepGear ? 'deep' : 'fast';
+
+            const tDecodeStart = performance.now();
+            const results = await readBarcodesFromImageData(imageData, {
+              formats: ALL_COMMON_FORMATS,
+              tryHarder: true,
+              tryRotate: true,
+              tryInvert: useDeepGear,
+              tryDownscale: true,
+              binarizer: totalFrames % 2 === 0 ? 'LocalAverage' : 'GlobalHistogram',
+              maxNumberOfSymbols: 1,
+            });
+
+            const decodeDuration = Math.round((performance.now() - tDecodeStart) * 10) / 10;
+            metricsRef.current.decodeTimeMs = decodeDuration;
+
+            if (now - lastTelemetrySyncRef.current >= 400) {
+              lastTelemetrySyncRef.current = now;
+              setTelemetry({ ...metricsRef.current });
+            }
+
+            if (results && results.length > 0 && results[0]?.text) {
+              const exactPhoto = canvas.toDataURL('image/jpeg', 0.85);
+              onCodeFound(results[0].text, results[0].format, exactPhoto);
+              return;
+            }
+          }
+        }
+      } catch {
+        // Bỏ qua lỗi frame đơn lẻ
+      } finally {
+        isDecodingRef.current = false;
+        scheduleNextFrame();
       }
     };
 
