@@ -107,6 +107,16 @@ class InventoryService {
     return this.parties;
   }
 
+  resolvePhotoUrl(storageKey?: string | null): string | null {
+    if (!storageKey) return null;
+    if (storageKey.startsWith('http://') || storageKey.startsWith('https://') || storageKey.startsWith('data:')) {
+      return storageKey;
+    }
+    const bucket = process.env.NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET || 'evidence-photos';
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ywpcfkrcmclcotvnelgy.supabase.co';
+    return `${supabaseUrl}/storage/v1/object/public/${bucket}/${storageKey}`;
+  }
+
   async getDevices(): Promise<Device[]> {
     if (isSupabaseConfigured()) {
       const supabase = createClient();
@@ -117,7 +127,8 @@ class InventoryService {
           product:products(*),
           owner_party:parties!devices_owner_party_id_fkey(*),
           holder_party:parties!devices_holder_party_id_fkey(*),
-          evidence_photos:evidence_photos(*)
+          evidence_photos:evidence_photos(*),
+          warranty_policies:warranty_policies(*)
         `)
         .order('created_at', { ascending: false });
       if (!error && data) {
@@ -127,7 +138,11 @@ class InventoryService {
             const { data: pubUrl } = supabase.storage
               .from('evidence-photos')
               .getPublicUrl(firstPhoto.storage_key);
-            dev.photo_url = pubUrl?.publicUrl || null;
+            dev.photo_url = pubUrl?.publicUrl || this.resolvePhotoUrl(firstPhoto.storage_key);
+          }
+          if (dev.warranty_policies && Array.isArray(dev.warranty_policies)) {
+            dev.supplier_warranty = dev.warranty_policies.find((p: any) => p.policy_type === 'SUPPLIER_POLICY') || null;
+            dev.customer_warranty = dev.warranty_policies.find((p: any) => p.policy_type === 'CUSTOMER_POLICY') || null;
           }
           return dev as Device;
         });
@@ -147,7 +162,8 @@ class InventoryService {
           product:products(*),
           owner_party:parties!devices_owner_party_id_fkey(*),
           holder_party:parties!devices_holder_party_id_fkey(*),
-          evidence_photos:evidence_photos(*)
+          evidence_photos:evidence_photos(*),
+          warranty_policies:warranty_policies(*)
         `)
         .or(`management_code.eq.${trimmed},serial_number.eq.${trimmed}`)
         .single();
@@ -158,7 +174,11 @@ class InventoryService {
           const { data: pubUrl } = supabase.storage
             .from('evidence-photos')
             .getPublicUrl(firstPhoto.storage_key);
-          dev.photo_url = pubUrl?.publicUrl || null;
+          dev.photo_url = pubUrl?.publicUrl || this.resolvePhotoUrl(firstPhoto.storage_key);
+        }
+        if (dev.warranty_policies && Array.isArray(dev.warranty_policies)) {
+          dev.supplier_warranty = dev.warranty_policies.find((p: any) => p.policy_type === 'SUPPLIER_POLICY') || null;
+          dev.customer_warranty = dev.warranty_policies.find((p: any) => p.policy_type === 'CUSTOMER_POLICY') || null;
         }
         return dev as Device;
       }
@@ -530,11 +550,16 @@ class InventoryService {
         .from('warranty_cases')
         .select(`
           *,
-          device:devices(*, product:products(*)),
+          device:devices!warranty_cases_device_id_fkey(*, product:products(*)),
+          replaced_device:devices!warranty_cases_replaced_by_device_id_fkey(*, product:products(*)),
           customer:parties(*)
         `)
         .order('created_at', { ascending: false });
-      if (!error && data) return data as WarrantyCase[];
+      if (error) {
+        console.error('Lỗi khi tải danh sách bảo hành từ Supabase:', error);
+      } else if (data) {
+        return data as WarrantyCase[];
+      }
     }
     return this.warrantyCases;
   }

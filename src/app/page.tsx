@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Device, Product, Party, WarrantyCase } from '@/types/database';
 import { inventoryService } from '@/lib/inventoryService';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
@@ -28,6 +28,11 @@ export default function HomePage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [warrantyCases, setWarrantyCases] = useState<WarrantyCase[]>([]);
   const [warrantyFilter, setWarrantyFilter] = useState<string>('ALL');
+
+  // Inventory Group & Accordion State
+  const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({});
+  const [inventorySearch, setInventorySearch] = useState('');
+  const [inventoryFilter, setInventoryFilter] = useState<'ALL' | 'STORAGE' | 'EXTERNAL' | 'WARRANTY' | 'NEEDS_INSPECTION'>('ALL');
 
   // Scanner Modal State
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -96,7 +101,6 @@ export default function HomePage() {
   const [newPartyPhone, setNewPartyPhone] = useState('');
   const [newPartyEmail, setNewPartyEmail] = useState('');
 
-
   // Initial Load
   const refreshData = async () => {
     setIsMock(inventoryService.isUsingMock());
@@ -107,9 +111,23 @@ export default function HomePage() {
         inventoryService.getDevices(),
         inventoryService.getWarrantyCases(),
       ]);
+
+      // Liên kết hồ sơ bảo hành đang mở vào từng thiết bị
+      const activeCaseMap = new Map<string, WarrantyCase>();
+      wcs.forEach((wc) => {
+        if (wc.case_status !== 'COMPLETED') {
+          if (wc.device_id) activeCaseMap.set(wc.device_id, wc);
+          if (wc.replaced_by_device_id) activeCaseMap.set(wc.replaced_by_device_id, wc);
+        }
+      });
+      const enrichedDevs = devs.map((d) => ({
+        ...d,
+        active_warranty_case: activeCaseMap.get(d.id) || null,
+      }));
+
       setProducts(prods);
       setParties(pts);
-      setDevices(devs);
+      setDevices(enrichedDevs);
       setWarrantyCases(wcs);
       if (prods.length > 0 && !inboundProductId) setInboundProductId(prods[0].id);
       if (pts.length > 0 && !inboundSupplierId) {
@@ -256,6 +274,14 @@ export default function HomePage() {
     if (!query.trim()) return;
     setLoading(true);
     const dev = await inventoryService.findDeviceByCode(query.trim());
+    if (dev) {
+      const activeCase = warrantyCases.find(
+        (wc) => wc.case_status !== 'COMPLETED' && (wc.device_id === dev.id || wc.replaced_by_device_id === dev.id)
+      );
+      if (activeCase) {
+        dev.active_warranty_case = activeCase;
+      }
+    }
     setSelectedDevice(dev);
     setLoading(false);
     if (!dev) {
@@ -567,6 +593,77 @@ export default function HomePage() {
     }
   };
 
+  // Nhóm thiết bị theo Model sản phẩm cho tab Tồn kho
+  const groupedInventoryModels = useMemo(() => {
+    const q = inventorySearch.trim().toLowerCase();
+    const map = new Map<string, {
+      productId: string;
+      productName: string;
+      brand: string;
+      category?: string;
+      items: Device[];
+      inStorageCount: number;
+      externalCount: number;
+      warrantyCount: number;
+      needsInspectionCount: number;
+    }>();
+
+    for (const dev of devices) {
+      // Bộ lọc danh mục tồn kho
+      if (inventoryFilter === 'STORAGE' && dev.holder_type !== 'INTERNAL_STORAGE') continue;
+      if (inventoryFilter === 'EXTERNAL' && dev.holder_type !== 'EXTERNAL_PARTY') continue;
+      if (inventoryFilter === 'WARRANTY' && dev.holder_type !== 'SUPPLIER_WARRANTY' && !dev.active_warranty_case) continue;
+      if (inventoryFilter === 'NEEDS_INSPECTION' && dev.technical_condition === 'USABLE') continue;
+
+      // Bộ lọc từ khóa
+      if (q) {
+        const nameMatch = dev.product?.name?.toLowerCase().includes(q);
+        const brandMatch = dev.product?.brand?.toLowerCase().includes(q);
+        const codeMatch = dev.management_code.toLowerCase().includes(q);
+        const serialMatch = dev.serial_number?.toLowerCase().includes(q);
+        if (!nameMatch && !brandMatch && !codeMatch && !serialMatch) continue;
+      }
+
+      const pId = dev.product_id || dev.product?.id || 'unknown';
+      if (!map.has(pId)) {
+        map.set(pId, {
+          productId: pId,
+          productName: dev.product?.name || 'Sản phẩm khác',
+          brand: dev.product?.brand || 'Khác',
+          category: dev.product?.category,
+          items: [],
+          inStorageCount: 0,
+          externalCount: 0,
+          warrantyCount: 0,
+          needsInspectionCount: 0,
+        });
+      }
+      const group = map.get(pId)!;
+      group.items.push(dev);
+      if (dev.holder_type === 'INTERNAL_STORAGE') group.inStorageCount++;
+      if (dev.holder_type === 'EXTERNAL_PARTY') group.externalCount++;
+      if (dev.holder_type === 'SUPPLIER_WARRANTY' || dev.active_warranty_case) group.warrantyCount++;
+      if (dev.technical_condition !== 'USABLE') group.needsInspectionCount++;
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.items.length - a.items.length);
+  }, [devices, inventorySearch, inventoryFilter]);
+
+  const toggleModelExpand = (modelId: string) => {
+    setExpandedModels((prev) => ({
+      ...prev,
+      [modelId]: !prev[modelId],
+    }));
+  };
+
+  const handleToggleAllModels = (expand: boolean) => {
+    const next: Record<string, boolean> = {};
+    groupedInventoryModels.forEach((g) => {
+      next[g.productId] = expand;
+    });
+    setExpandedModels(next);
+  };
+
   if (checkingAuth) {
     return (
       <div className="app-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
@@ -794,50 +891,105 @@ export default function HomePage() {
                 </div>
 
                 {/* Ảnh chứng từ chụp lúc quét nhập kho */}
-                {(selectedDevice.photo_url || (selectedDevice.evidence_photos && selectedDevice.evidence_photos.length > 0)) && (
-                  <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span>📷</span>
-                      <span>Ảnh chụp chứng từ lúc quét nhập kho:</span>
-                    </div>
-                    <div
-                      style={{
-                        position: 'relative',
-                        borderRadius: 'var(--radius-sm)',
-                        overflow: 'hidden',
-                        cursor: 'pointer',
-                        border: '1px solid var(--border-color)',
-                        maxHeight: 180,
-                        background: '#000',
-                      }}
-                      onClick={() =>
-                        setPreviewPhoto({
-                          url: selectedDevice.photo_url || (selectedDevice.evidence_photos?.[0] as any)?.storage_key || '',
-                          title: `Ảnh chứng từ: ${selectedDevice.management_code} (${selectedDevice.serial_number || 'Không có SN'})`,
-                        })
-                      }
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={selectedDevice.photo_url || (selectedDevice.evidence_photos?.[0] as any)?.storage_key || ''}
-                        alt="Ảnh chứng từ nhập kho"
-                        style={{ width: '100%', height: 180, objectFit: 'cover', display: 'block' }}
-                      />
+                {(() => {
+                  const devPhoto = selectedDevice.photo_url || 
+                    (selectedDevice.evidence_photos && selectedDevice.evidence_photos.length > 0
+                      ? inventoryService.resolvePhotoUrl(selectedDevice.evidence_photos[0].storage_key)
+                      : null);
+                  if (!devPhoto) return null;
+                  return (
+                    <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span>📷</span>
+                          <span>Ảnh chụp chứng từ lúc quét nhập kho:</span>
+                        </div>
+                        <span
+                          style={{ fontSize: '0.75rem', color: 'var(--primary)', cursor: 'pointer', fontWeight: 600 }}
+                          onClick={() => setPreviewPhoto({ url: devPhoto, title: `Ảnh chứng từ: ${selectedDevice.management_code} (${selectedDevice.serial_number || 'Không có SN'})` })}
+                        >
+                          Phóng to ↗
+                        </span>
+                      </div>
                       <div
                         style={{
-                          position: 'absolute',
-                          bottom: 6,
-                          right: 6,
-                          background: 'rgba(0,0,0,0.75)',
-                          color: '#fff',
-                          fontSize: '0.72rem',
-                          padding: '3px 8px',
-                          borderRadius: 4,
+                          position: 'relative',
+                          borderRadius: 'var(--radius-sm)',
+                          overflow: 'hidden',
+                          cursor: 'pointer',
+                          border: '1px solid var(--border-color)',
+                          maxHeight: 220,
+                          background: '#090d16',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
                         }}
+                        onClick={() =>
+                          setPreviewPhoto({
+                            url: devPhoto,
+                            title: `Ảnh chứng từ: ${selectedDevice.management_code} (${selectedDevice.serial_number || 'Không có SN'})`,
+                          })
+                        }
                       >
-                        🔍 Bấm để phóng to
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={devPhoto}
+                          alt="Ảnh chứng từ nhập kho"
+                          style={{ width: '100%', height: 'auto', maxHeight: 220, objectFit: 'contain', display: 'block' }}
+                        />
+                        <div
+                          style={{
+                            position: 'absolute',
+                            bottom: 6,
+                            right: 6,
+                            background: 'rgba(0,0,0,0.78)',
+                            color: '#fff',
+                            fontSize: '0.72rem',
+                            padding: '3px 8px',
+                            borderRadius: 4,
+                          }}
+                        >
+                          🔍 Bấm để xem ảnh đầy đủ
+                        </div>
                       </div>
                     </div>
+                  );
+                })()}
+
+                {/* Banner cảnh báo nếu thiết bị đang trong quy trình bảo hành */}
+                {selectedDevice.active_warranty_case && (
+                  <div
+                    style={{
+                      background: 'rgba(168,85,247,0.12)',
+                      border: '1px solid var(--purple)',
+                      padding: 12,
+                      borderRadius: 'var(--radius-sm)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 700, color: 'var(--purple)', fontSize: '0.88rem' }}>
+                        🛡️ Đang trong quy trình bảo hành
+                      </span>
+                      <span className="badge badge-warranty">
+                        {selectedDevice.active_warranty_case.code}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      <strong>Lỗi báo:</strong> {selectedDevice.active_warranty_case.reported_fault}
+                    </div>
+                    <button
+                      className="btn btn-secondary"
+                      style={{ padding: '4px 10px', fontSize: '0.78rem', alignSelf: 'flex-start', marginTop: 4 }}
+                      onClick={() => {
+                        setWarrantyFilter('ALL');
+                        setActiveTab('warranty');
+                      }}
+                    >
+                      Xem hồ sơ bảo hành ➔
+                    </button>
                   </div>
                 )}
 
@@ -965,7 +1117,31 @@ export default function HomePage() {
             {inboundItems.length > 0 && (
               <div className="card">
                 <div className="card-title">
-                  <span>Danh sách thực nhận ({inboundItems.length})</span>
+                  <span>Danh sách thực nhận ({inboundItems.length} thiết bị)</span>
+                </div>
+                {/* Tổng hợp theo từng Model */}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                  {Object.entries(
+                    inboundItems.reduce((acc, item) => {
+                      acc[item.product_name] = (acc[item.product_name] || 0) + 1;
+                      return acc;
+                    }, {} as Record<string, number>)
+                  ).map(([name, count]) => (
+                    <span
+                      key={name}
+                      style={{
+                        background: 'rgba(59,130,246,0.15)',
+                        border: '1px solid rgba(59,130,246,0.3)',
+                        color: '#93c5fd',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        padding: '3px 8px',
+                        borderRadius: 12,
+                      }}
+                    >
+                      📦 {name}: <strong>{count}</strong>
+                    </span>
+                  ))}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {inboundItems.map((item, idx) => (
@@ -1382,63 +1558,329 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* ================= TAB 5: TỒN KHO & DANH SÁCH ================= */}
+        {/* ================= TAB 5: TỒN KHO & DANH SÁCH THEO MODEL (ACCORDION) ================= */}
         {activeTab === 'inventory' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* Header tổng quan */}
             <div className="card">
-              <div className="card-title">
-                <span>Tổng hợp thiết bị ({devices.length})</span>
-                <button
-                  className="btn btn-secondary"
-                  style={{ padding: '6px 12px', minHeight: 32, fontSize: '0.8rem' }}
-                  onClick={() => {
-                    setScannerTarget('return');
-                    setScannerOpen(true);
-                  }}
-                >
-                  🔄 Thu hồi máy mượn
-                </button>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>
+                    📦 Tồn kho theo Model sản phẩm
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    Tổng cộng: <strong>{groupedInventoryModels.length}</strong> model | <strong>{devices.length}</strong> thiết bị
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ padding: '6px 10px', minHeight: 32, fontSize: '0.78rem' }}
+                    onClick={() => {
+                      const allOpen = groupedInventoryModels.every((g) => expandedModels[g.productId]);
+                      handleToggleAllModels(!allOpen);
+                    }}
+                  >
+                    {groupedInventoryModels.every((g) => expandedModels[g.productId]) ? '▲ Thu gọn tất cả' : '▼ Mở rộng tất cả'}
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ padding: '6px 10px', minHeight: 32, fontSize: '0.78rem' }}
+                    onClick={() => {
+                      setScannerTarget('return');
+                      setScannerOpen(true);
+                    }}
+                  >
+                    🔄 Thu hồi máy mượn
+                  </button>
+                </div>
+              </div>
+
+              {/* Tìm kiếm & Lọc nhanh */}
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="🔍 Lọc theo tên model, hãng, số serial hoặc mã QL..."
+                  value={inventorySearch}
+                  onChange={(e) => setInventorySearch(e.target.value)}
+                  style={{ height: 38, fontSize: '0.85rem' }}
+                />
+
+                <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2 }}>
+                  {[
+                    { key: 'ALL', label: `Tất cả (${devices.length})` },
+                    { key: 'STORAGE', label: 'Tại kho' },
+                    { key: 'EXTERNAL', label: 'Đang mượn / Khách' },
+                    { key: 'WARRANTY', label: 'Đang bảo hành' },
+                    { key: 'NEEDS_INSPECTION', label: 'Cần kiểm tra / Lỗi' },
+                  ].map((f) => (
+                    <button
+                      key={f.key}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: 'var(--radius-full)',
+                        border: '1px solid var(--border-color)',
+                        background: inventoryFilter === f.key ? 'var(--primary)' : 'var(--bg-input)',
+                        color: inventoryFilter === f.key ? '#fff' : 'var(--text-secondary)',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                      onClick={() => setInventoryFilter(f.key as any)}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
-            {devices.map((dev) => {
-              const readiness = inventoryService.checkOutboundReadiness(dev);
-              return (
-                <div
-                  key={dev.id}
-                  className="card"
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => {
-                    setSelectedDevice(dev);
-                    setActiveTab('search');
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontWeight: 700 }}>{dev.product?.name}</div>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                        {dev.management_code} {dev.serial_number ? `| SN: ${dev.serial_number}` : ''}
+            {/* Danh sách Accordion Model */}
+            {groupedInventoryModels.length === 0 ? (
+              <div className="card" style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)' }}>
+                Không tìm thấy model hoặc thiết bị nào phù hợp với bộ lọc.
+              </div>
+            ) : (
+              groupedInventoryModels.map((group) => {
+                const isExpanded = expandedModels[group.productId] ?? true;
+                return (
+                  <div
+                    key={group.productId}
+                    className="card"
+                    style={{
+                      padding: 0,
+                      overflow: 'hidden',
+                      border: isExpanded ? '1px solid rgba(59,130,246,0.5)' : '1px solid var(--border-color)',
+                      transition: 'border-color 0.2s',
+                    }}
+                  >
+                    {/* Header Model (Accordion Title) */}
+                    <div
+                      style={{
+                        padding: '12px 14px',
+                        background: isExpanded ? 'rgba(59,130,246,0.08)' : 'var(--bg-card)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                        userSelect: 'none',
+                      }}
+                      onClick={() => toggleModelExpand(group.productId)}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                              transition: 'transform 0.2s ease',
+                              fontSize: '0.8rem',
+                              color: 'var(--primary)',
+                            }}
+                          >
+                            ▶
+                          </span>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: '0.98rem', color: '#f8fafc' }}>
+                              {group.productName}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 }}>
+                              <span className="badge badge-internal">{group.brand}</span>
+                              {group.category && <span>• {group.category}</span>}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Tổng số Serial của Model */}
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', flexShrink: 0 }}>
+                          <span
+                            style={{
+                              background: 'var(--primary)',
+                              color: '#fff',
+                              fontSize: '0.78rem',
+                              fontWeight: 700,
+                              padding: '3px 8px',
+                              borderRadius: 12,
+                            }}
+                          >
+                            {group.items.length} serials
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Pill con số chi tiết */}
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: '0.73rem', paddingLeft: 20 }}>
+                        <span style={{ color: 'var(--success)' }}>
+                          🟢 {group.inStorageCount} tại kho
+                        </span>
+                        {group.externalCount > 0 && (
+                          <span style={{ color: 'var(--warning)' }}>
+                            🟡 {group.externalCount} khách/mượn
+                          </span>
+                        )}
+                        {group.warrantyCount > 0 && (
+                          <span style={{ color: 'var(--purple)' }}>
+                            🟣 {group.warrantyCount} đang BH
+                          </span>
+                        )}
+                        {group.needsInspectionCount > 0 && (
+                          <span style={{ color: 'var(--danger)' }}>
+                            🔴 {group.needsInspectionCount} cần KT/lỗi
+                          </span>
+                        )}
                       </div>
                     </div>
-                    {readiness.eligible ? (
-                      <span className="badge badge-usable">Sẵn sàng xuất</span>
-                    ) : (
-                      <span className="badge badge-inspection">Chưa thể xuất</span>
+
+                    {/* Danh sách các Serial của Model (Accordion Body) */}
+                    {isExpanded && (
+                      <div
+                        style={{
+                          padding: '10px 14px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 8,
+                          background: 'rgba(0,0,0,0.18)',
+                          borderTop: '1px solid var(--border-color)',
+                        }}
+                      >
+                        {group.items.map((dev) => {
+                          const readiness = inventoryService.checkOutboundReadiness(dev);
+                          const photoUrl = dev.photo_url || 
+                            (dev.evidence_photos && dev.evidence_photos.length > 0
+                              ? inventoryService.resolvePhotoUrl(dev.evidence_photos[0].storage_key)
+                              : null);
+
+                          return (
+                            <div
+                              key={dev.id}
+                              style={{
+                                padding: '10px 12px',
+                                background: 'var(--bg-card)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: 'var(--radius-sm)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 6,
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+                                  {/* Ảnh chụp chứng từ nếu có */}
+                                  {photoUrl ? (
+                                    <div
+                                      onClick={() =>
+                                        setPreviewPhoto({
+                                          url: photoUrl,
+                                          title: `Ảnh chứng từ: ${group.productName} (SN: ${dev.serial_number || dev.management_code})`,
+                                        })
+                                      }
+                                      style={{
+                                        width: 38,
+                                        height: 38,
+                                        borderRadius: 6,
+                                        overflow: 'hidden',
+                                        border: '1.5px solid var(--primary)',
+                                        cursor: 'pointer',
+                                        flexShrink: 0,
+                                        background: '#000',
+                                      }}
+                                      title="Bấm để xem ảnh phóng to"
+                                    >
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img
+                                        src={photoUrl}
+                                        alt="Thumbnail"
+                                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                      />
+                                    </div>
+                                  ) : (
+                                    <div
+                                      style={{
+                                        width: 38,
+                                        height: 38,
+                                        borderRadius: 6,
+                                        background: 'rgba(255,255,255,0.05)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        fontSize: '1rem',
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                      🏷️
+                                    </div>
+                                  )}
+
+                                  <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#93c5fd' }}>
+                                      SN: {dev.serial_number || '(Không có SN)'}
+                                    </div>
+                                    <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                                      Mã QL: <strong>{dev.management_code}</strong>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Nút xem chi tiết */}
+                                <button
+                                  className="btn btn-secondary"
+                                  style={{ padding: '4px 10px', minHeight: 28, fontSize: '0.74rem', flexShrink: 0 }}
+                                  onClick={() => {
+                                    setSelectedDevice(dev);
+                                    setActiveTab('search');
+                                  }}
+                                >
+                                  🔍 Tra cứu
+                                </button>
+                              </div>
+
+                              {/* Badges trạng thái */}
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                                <span className="badge badge-storage">
+                                  {dev.holder_type === 'INTERNAL_STORAGE' && 'Tại kho'}
+                                  {dev.holder_type === 'EXTERNAL_PARTY' && (dev.holder_party?.name ? `Khách: ${dev.holder_party.name}` : 'Bên ngoài')}
+                                  {dev.holder_type === 'SUPPLIER_WARRANTY' && 'Tại TTBH / NCC'}
+                                </span>
+
+                                <span className={`badge ${dev.technical_condition === 'USABLE' ? 'badge-usable' : 'badge-faulty'}`}>
+                                  {dev.technical_condition === 'USABLE' && 'Sử dụng tốt'}
+                                  {dev.technical_condition === 'NEEDS_INSPECTION' && 'Cần kiểm tra'}
+                                  {dev.technical_condition === 'FAULTY' && 'Lỗi'}
+                                </span>
+
+                                {readiness.eligible ? (
+                                  <span className="badge badge-usable">Sẵn sàng xuất</span>
+                                ) : (
+                                  <span className="badge badge-inspection">Chưa thể xuất</span>
+                                )}
+
+                                {dev.active_warranty_case && (
+                                  <span className="badge badge-warranty">
+                                    Đang BH: {dev.active_warranty_case.code}
+                                  </span>
+                                )}
+
+                                {dev.active_assignment && (
+                                  <button
+                                    className="btn btn-warning"
+                                    style={{ padding: '2px 8px', minHeight: 24, fontSize: '0.72rem', marginLeft: 'auto' }}
+                                    onClick={() => setReturnDevice(dev)}
+                                  >
+                                    Thu hồi
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
-
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <span className="badge badge-internal">{dev.owner_type === 'INTERNAL' ? 'Kho' : 'Khách'}</span>
-                    <span className="badge badge-storage">
-                      {dev.holder_type === 'INTERNAL_STORAGE' ? 'Tại kho' : 'Bên ngoài'}
-                    </span>
-                    <span className={`badge ${dev.technical_condition === 'USABLE' ? 'badge-usable' : 'badge-faulty'}`}>
-                      {dev.technical_condition}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         )}
       </main>
