@@ -28,6 +28,8 @@ export default function ScannerModal({
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
   const [availableCameras, setAvailableCameras] = useState<CameraDevice[]>([]);
   const [currentCameraIndex, setCurrentCameraIndex] = useState<number>(0);
+  const [hasTorch, setHasTorch] = useState<boolean>(false);
+  const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
   const [inAppNotice, setInAppNotice] = useState(false);
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -50,6 +52,8 @@ export default function ScannerModal({
     }
     setCameraActive(false);
     setIsLoadingCamera(false);
+    setIsTorchOn(false);
+    setHasTorch(false);
   }, []);
 
   // ─── Xử lý khi quét trúng mã ─────────────────────────────────────────────
@@ -64,7 +68,14 @@ export default function ScannerModal({
         return;
       }
 
-      // Thử lấy khung hình video đối chiếu nếu có
+      // Rung phản hồi (haptic) nếu thiết bị hỗ trợ
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try {
+          navigator.vibrate(120);
+        } catch {}
+      }
+
+      // Lấy khung hình đối chiếu
       let photo = photoDataUrl;
       if (!photo) {
         try {
@@ -89,7 +100,7 @@ export default function ScannerModal({
     [stopScanner]
   );
 
-  // ─── Khởi động camera với Html5Qrcode ────────────────────────────────────
+  // ─── Khởi động camera với Html5Qrcode tối ưu cho Barcode 1D & QR ─────────
   const startScanner = useCallback(
     async (specificDeviceId?: string) => {
       await stopScanner();
@@ -113,7 +124,6 @@ export default function ScannerModal({
         }
       }
 
-      // Đảm bảo DOM element tồn tại
       const containerEl = document.getElementById(CONTAINER_ID);
       if (!containerEl) {
         setIsLoadingCamera(false);
@@ -121,23 +131,31 @@ export default function ScannerModal({
       }
 
       try {
+        // TẤT CẢ các định dạng Barcode 1D và 2D phổ biến trong kho vận & bảo hành
         const scanner = new Html5Qrcode(CONTAINER_ID, {
           formatsToSupport: [
-            Html5QrcodeSupportedFormats.QR_CODE,
             Html5QrcodeSupportedFormats.CODE_128,
-            Html5QrcodeSupportedFormats.CODE_39,
             Html5QrcodeSupportedFormats.EAN_13,
             Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.CODE_93,
             Html5QrcodeSupportedFormats.UPC_A,
             Html5QrcodeSupportedFormats.UPC_E,
+            Html5QrcodeSupportedFormats.UPC_EAN_EXTENSION,
             Html5QrcodeSupportedFormats.CODABAR,
             Html5QrcodeSupportedFormats.ITF,
+            Html5QrcodeSupportedFormats.QR_CODE,
+            Html5QrcodeSupportedFormats.DATA_MATRIX,
           ],
+          experimentalFeatures: {
+            // Sử dụng BarcodeDetector gốc của Android/Chrome nếu có (nhanh và nhạy hơn gấp 10 lần)
+            useBarCodeDetectorIfSupported: true,
+          },
           verbose: false,
         });
         scannerRef.current = scanner;
 
-        // Lấy danh sách camera khả dụng
+        // Lấy danh sách camera
         try {
           const cameras = await Html5Qrcode.getCameras();
           if (cameras && cameras.length > 0) {
@@ -145,25 +163,29 @@ export default function ScannerModal({
           }
         } catch {}
 
-        // Cấu hình camera
+        // Độ phân giải cao (1280x720) giúp các vạch barcode 1D sắc nét, không bị nhòe
+        const scanConfig = {
+          fps: 15,
+          disableFlip: false,
+          videoConstraints: specificDeviceId
+            ? {
+                deviceId: { exact: specificDeviceId },
+                width: { min: 640, ideal: 1280, max: 1920 },
+                height: { min: 480, ideal: 720, max: 1080 },
+              }
+            : {
+                facingMode: 'environment',
+                width: { min: 640, ideal: 1280, max: 1920 },
+                height: { min: 480, ideal: 720, max: 1080 },
+              },
+          // QUAN TRỌNG: KHÔNG đặt qrbox hẹp!
+          // Khi không giới hạn qrbox, toàn bộ khung hình camera đều được quét,
+          // giúp quét được mã vạch dài nằm ngang hoặc bất kỳ vị trí nào trên màn hình.
+        };
+
         const cameraConfig = specificDeviceId
           ? { deviceId: { exact: specificDeviceId } }
           : { facingMode: 'environment' };
-
-        // Cấu hình khung quét
-        const scanConfig = {
-          fps: 12,
-          qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
-            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-            const boxWidth = Math.floor(minEdge * 0.85);
-            // Dạng hình chữ nhật ngang vừa cho Barcode lẫn QR
-            return {
-              width: Math.max(220, boxWidth),
-              height: Math.max(160, Math.floor(boxWidth * 0.7)),
-            };
-          },
-          aspectRatio: 1.333333,
-        };
 
         await scanner.start(
           cameraConfig,
@@ -172,12 +194,20 @@ export default function ScannerModal({
             onCodeFound(decodedText);
           },
           () => {
-            // Callback gọi mỗi frame không có mã - bỏ qua
+            // Không tìm thấy mã trong frame này - bỏ qua
           }
         );
 
         setIsLoadingCamera(false);
         setCameraActive(true);
+
+        // Kiểm tra xem camera có hỗ trợ đèn pin (torch) không
+        try {
+          const capabilities = scanner.getRunningTrackCameraCapabilities();
+          if (capabilities && capabilities.torchFeature && capabilities.torchFeature().isSupported()) {
+            setHasTorch(true);
+          }
+        } catch {}
       } catch (err: any) {
         console.error('Html5Qrcode start error:', err);
         setIsLoadingCamera(false);
@@ -189,12 +219,28 @@ export default function ScannerModal({
         } else if (/notfound/i.test(errMsg) || /no device/i.test(errMsg)) {
           setCameraError('Không tìm thấy camera khả dụng trên thiết bị này.');
         } else {
-          setCameraError('Không thể mở camera. Vui lòng bấm "📷 Chụp ảnh bằng máy" bên dưới hoặc nhập thủ công.');
+          setCameraError('Không thể kết nối camera. Hãy bấm "📷 Chụp ảnh bằng máy" bên dưới hoặc nhập thủ công.');
         }
       }
     },
     [stopScanner, onCodeFound]
   );
+
+  // ─── Bật / Tắt Đèn pin (Torch) ───────────────────────────────────────────
+  const handleToggleTorch = async () => {
+    const scanner = scannerRef.current;
+    if (!scanner || !hasTorch) return;
+    try {
+      const nextState = !isTorchOn;
+      await scanner.applyVideoConstraints({
+        // @ts-ignore
+        advanced: [{ torch: nextState }],
+      });
+      setIsTorchOn(nextState);
+    } catch (e) {
+      console.warn('Lỗi bật đèn pin:', e);
+    }
+  };
 
   // ─── Đổi camera (Chuyển giữa các ống kính hoặc trước/sau) ─────────────────
   const handleCycleCamera = () => {
@@ -207,7 +253,7 @@ export default function ScannerModal({
     }
   };
 
-  // ─── Quét bằng ảnh chụp từ camera gốc điện thoại ─────────────────────────
+  // ─── Quét bằng ảnh chụp từ camera gốc điện thoại (Độ nét cao nhất) ────────
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -215,34 +261,64 @@ export default function ScannerModal({
     setIsLoadingCamera(true);
     setCameraError(null);
 
+    // Tạm dừng scanner live trước khi quét file để tránh tranh chấp bộ nhớ
+    await stopScanner();
+
     try {
-      // Đọc preview hình ảnh
       const reader = new FileReader();
       reader.onload = async (evt) => {
         const photoDataUrl = evt.target?.result as string;
 
         try {
-          // Tạo một instance quét tạm thời cho file
-          let fileScanner = scannerRef.current;
-          let needCleanup = false;
-          if (!fileScanner) {
-            fileScanner = new Html5Qrcode(CONTAINER_ID, { verbose: false });
-            needCleanup = true;
+          const fileScanner = new Html5Qrcode(CONTAINER_ID, {
+            formatsToSupport: [
+              Html5QrcodeSupportedFormats.CODE_128,
+              Html5QrcodeSupportedFormats.EAN_13,
+              Html5QrcodeSupportedFormats.EAN_8,
+              Html5QrcodeSupportedFormats.CODE_39,
+              Html5QrcodeSupportedFormats.CODE_93,
+              Html5QrcodeSupportedFormats.UPC_A,
+              Html5QrcodeSupportedFormats.UPC_E,
+              Html5QrcodeSupportedFormats.CODABAR,
+              Html5QrcodeSupportedFormats.ITF,
+              Html5QrcodeSupportedFormats.QR_CODE,
+            ],
+            experimentalFeatures: {
+              useBarCodeDetectorIfSupported: true,
+            },
+            verbose: false,
+          });
+
+          let foundText: string | null = null;
+          try {
+            foundText = await fileScanner.scanFile(file, false);
+          } catch {}
+          fileScanner.clear();
+
+          // Dự phòng quét bằng native BarcodeDetector nếu Html5Qrcode scanFile chưa ra
+          if (!foundText && typeof window !== 'undefined' && (window as any).BarcodeDetector) {
+            try {
+              const img = new Image();
+              img.src = photoDataUrl;
+              await new Promise((res) => { img.onload = res; });
+              const detector = new (window as any).BarcodeDetector();
+              const codes = await detector.detect(img);
+              if (codes.length > 0 && codes[0]?.rawValue) {
+                foundText = codes[0].rawValue;
+              }
+            } catch {}
           }
 
-          const decodedText = await fileScanner.scanFile(file, false);
-          if (needCleanup) fileScanner.clear();
-
           setIsLoadingCamera(false);
-          if (decodedText) {
-            onCodeFound(decodedText, photoDataUrl);
+          if (foundText) {
+            onCodeFound(foundText, photoDataUrl);
           } else {
-            setCameraError('Không tìm thấy mã vạch trong ảnh chụp. Hãy chụp lại gần hơn và rõ nét.');
+            setCameraError('Không tìm thấy mã vạch trong ảnh chụp. Hãy chụp lại gần hơn và rõ nét các vạch.');
           }
         } catch (scanErr) {
           console.warn('Lỗi quét file:', scanErr);
           setIsLoadingCamera(false);
-          setCameraError('Không nhận diện được mã vạch trong ảnh. Hãy chụp lại ở cự ly gần và đủ sáng.');
+          setCameraError('Không nhận diện được mã vạch. Hãy chụp lại ở cự ly gần và đủ sáng.');
         }
       };
       reader.readAsDataURL(file);
@@ -263,7 +339,6 @@ export default function ScannerModal({
       setInAppNotice(false);
       isHandlingDetectionRef.current = false;
 
-      // Chờ 200ms để modal DOM render hoàn tất rồi khởi động camera
       timer = setTimeout(() => {
         startScanner();
       }, 200);
@@ -308,7 +383,7 @@ export default function ScannerModal({
           <div>
             <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{title}</h3>
             <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-              Động cơ: Html5Qrcode Pro {cameraActive ? '● Đang quét...' : ''}
+              Động cơ: Html5Qrcode Pro (Đa định dạng Barcode 1D & QR)
             </span>
           </div>
           <button
@@ -338,7 +413,7 @@ export default function ScannerModal({
               marginTop: 4,
             }}
           >
-            ⚠️ Đang mở trong ứng dụng khác. Nếu camera bị đen, hãy bấm menu ⋮ → <strong>Mở bằng Chrome / Safari</strong>.
+            ⚠️ Đang mở trong ứng dụng khác. Nếu quét khó, hãy bấm menu ⋮ → <strong>Mở bằng Chrome / Safari</strong>.
           </div>
         )}
 
@@ -415,6 +490,72 @@ export default function ScannerModal({
                   minHeight: 280,
                 }}
               />
+
+              {/* Viewfinder ngắm barcode & tia laser chạy liên tục */}
+              {cameraActive && !isLoadingCamera && !cameraError && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    pointerEvents: 'none',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 4,
+                  }}
+                >
+                  {/* Khung ngắm chữ nhật ngang tối ưu cho mã vạch 1D */}
+                  <div
+                    style={{
+                      position: 'relative',
+                      width: '86%',
+                      height: '56%',
+                      border: '2px solid rgba(59, 130, 246, 0.85)',
+                      borderRadius: 14,
+                      boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.38)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    {/* Tia laser đỏ quét ngang */}
+                    <div
+                      style={{
+                        position: 'absolute',
+                        left: 0,
+                        right: 0,
+                        height: 2,
+                        background: '#ef4444',
+                        boxShadow: '0 0 10px #ef4444, 0 0 4px #fff',
+                        animation: 'scanLaser 2s ease-in-out infinite alternate',
+                      }}
+                    />
+                    {/* 4 góc ngắm trợ lực */}
+                    {[
+                      { top: 0, left: 0, borderTop: '3px solid #60a5fa', borderLeft: '3px solid #60a5fa' },
+                      { top: 0, right: 0, borderTop: '3px solid #60a5fa', borderRight: '3px solid #60a5fa' },
+                      { bottom: 0, left: 0, borderBottom: '3px solid #60a5fa', borderLeft: '3px solid #60a5fa' },
+                      { bottom: 0, right: 0, borderBottom: '3px solid #60a5fa', borderRight: '3px solid #60a5fa' },
+                    ].map((s, i) => (
+                      <div key={i} style={{ position: 'absolute', width: 16, height: 16, ...s }} />
+                    ))}
+                  </div>
+
+                  {/* Dòng hướng dẫn người dùng */}
+                  <div
+                    style={{
+                      marginTop: 10,
+                      background: 'rgba(0, 0, 0, 0.72)',
+                      color: '#e2e8f0',
+                      fontSize: '0.74rem',
+                      padding: '4px 12px',
+                      borderRadius: 20,
+                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                    }}
+                  >
+                    💡 Để mã vạch nằm ngang, giữ cách camera 15-20cm
+                  </div>
+                </div>
+              )}
 
               {/* Loading overlay */}
               {isLoadingCamera && !cameraError && (
@@ -508,6 +649,18 @@ export default function ScannerModal({
                 <span>📷</span>
                 <span>Chụp ảnh bằng máy (Khuyên dùng)</span>
               </button>
+
+              {hasTorch && (
+                <button
+                  type="button"
+                  className={`btn ${isTorchOn ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '9px 12px', fontSize: '0.85rem' }}
+                  onClick={handleToggleTorch}
+                  title="Bật/tắt đèn flash"
+                >
+                  {isTorchOn ? '🔦 Tắt đèn' : '⚡ Bật đèn'}
+                </button>
+              )}
 
               <button
                 type="button"
