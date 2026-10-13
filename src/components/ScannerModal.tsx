@@ -9,6 +9,19 @@ export interface ScannedBatchItem {
   timestamp: number;
 }
 
+export interface ScannerTelemetry {
+  cameraOpenMs: number | null;
+  wasmInitMs: number | null;
+  cropTimeMs: number;
+  decodeTimeMs: number;
+  timeToDetectMs: number | null;
+  actualResolution: string;
+  cameraLabel: string;
+  fps: number;
+  totalFramesScanned: number;
+  activeGear: 'fast' | 'deep';
+}
+
 interface ScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -18,51 +31,50 @@ interface ScannerModalProps {
   allowManual?: boolean;
 }
 
-// ─── Module-level WASM Pre-warming (Khởi tạo sẵn trong RAM khi nạp trang) ──
+// ─── THÔNG TIN ENGINE ZXING C++ WASM THỰC TẾ ───────────────────────────────
+// Package: zxing-wasm (v3.1.5)
+// Module: zxing-wasm/reader (Reader-only build từ zxing-cpp qua Emscripten)
+// Lưu ý: "Turbo" trước đây chỉ là nhãn UI. Thực tế engine là zxing-cpp compiled to WebAssembly.
+export const ZXING_ENGINE_INFO = {
+  package: 'zxing-wasm',
+  version: '3.1.5',
+  flavor: 'reader-only (zxing-cpp WebAssembly)',
+  wasmFile: '/zxing_reader.wasm (944 KB)',
+};
+
+// Định dạng Barcode tem thiết bị phần cứng (loại trừ EAN bán lẻ để chống nhận nhầm)
+const HARDWARE_SERIAL_FORMATS: any[] = ['Code128', 'Code39', 'QRCode', 'DataMatrix'];
+const ALL_FORMATS: any[] = ['Code128', 'Code39', 'QRCode', 'DataMatrix', 'EAN13', 'UPCA', 'ITF', 'Codabar'];
+
+// ─── Module-level WASM Pre-warming (Khởi tạo duy nhất 1 lần trong RAM) ─────
 let cachedZxingReader: ((imageData: ImageData, options?: any) => Promise<any[]>) | null = null;
 let cachedReadBarcodes: ((input: any, options?: any) => Promise<any[]>) | null = null;
+let wasmInitDurationMs: number | null = null;
 let isPreloadingWasm = false;
-
-// ─── Native BarcodeDetector (Phần cứng GPU / Apple Neural Engine / Android NPU) ──
-let cachedNativeDetector: any = null;
-let hasCheckedNativeDetector = false;
-
-async function getNativeBarcodeDetector() {
-  if (hasCheckedNativeDetector) return cachedNativeDetector;
-  hasCheckedNativeDetector = true;
-  if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
-    try {
-      const BarcodeDetectorClass = (window as any).BarcodeDetector;
-      let supportedFormats: string[] = [];
-      if (typeof BarcodeDetectorClass.getSupportedFormats === 'function') {
-        supportedFormats = await BarcodeDetectorClass.getSupportedFormats();
-      }
-      const desired = ['code_128', 'ean_13', 'code_39', 'qr_code', 'data_matrix', 'upc_a', 'upc_e'];
-      const formats = supportedFormats.length > 0
-        ? desired.filter((f: string) => supportedFormats.includes(f))
-        : desired;
-      if (formats.length > 0) {
-        cachedNativeDetector = new BarcodeDetectorClass({ formats });
-      }
-    } catch (e) {
-      console.warn('Native BarcodeDetector fallback:', e);
-      cachedNativeDetector = null;
-    }
-  }
-  return cachedNativeDetector;
-}
 
 async function getOrPreloadWasm() {
   if (cachedZxingReader && cachedReadBarcodes) {
-    return { readBarcodesFromImageData: cachedZxingReader, readBarcodes: cachedReadBarcodes };
+    return {
+      readBarcodesFromImageData: cachedZxingReader,
+      readBarcodes: cachedReadBarcodes,
+      initDurationMs: wasmInitDurationMs,
+    };
   }
+
   if (isPreloadingWasm) {
     while (isPreloadingWasm) {
-      await new Promise((r) => setTimeout(r, 20));
+      await new Promise((r) => setTimeout(r, 15));
     }
-    return { readBarcodesFromImageData: cachedZxingReader!, readBarcodes: cachedReadBarcodes! };
+    return {
+      readBarcodesFromImageData: cachedZxingReader!,
+      readBarcodes: cachedReadBarcodes!,
+      initDurationMs: wasmInitDurationMs,
+    };
   }
+
   isPreloadingWasm = true;
+  const tStart = performance.now();
+
   try {
     const zxing = await import('zxing-wasm/reader');
     if (zxing.prepareZXingModule) {
@@ -75,37 +87,42 @@ async function getOrPreloadWasm() {
         },
       });
     }
-    // Chạy thử 1 buffer để JIT engine WebAssembly biên dịch trước toàn bộ bảng giải mã
+
+    // Pre-warm JIT engine với bảng giải mã serial thật
     try {
-      const dummy = new ImageData(10, 10);
+      const dummy = new ImageData(16, 16);
       await zxing.readBarcodesFromImageData(dummy, {
-        formats: ['Code128', 'Code39', 'EAN-13', 'QRCode', 'UPC-A', 'ITF', 'Codabar'],
-        tryHarder: true,
+        formats: HARDWARE_SERIAL_FORMATS,
+        tryHarder: false,
         tryRotate: true,
-        tryInvert: true,
-        tryDownscale: true,
         binarizer: 'LocalAverage',
       });
     } catch {}
+
     cachedZxingReader = zxing.readBarcodesFromImageData;
     cachedReadBarcodes = zxing.readBarcodes;
+    wasmInitDurationMs = Math.round(performance.now() - tStart);
   } catch (e) {
-    console.warn('Lỗi preload WebAssembly:', e);
+    console.warn('Lỗi khởi tạo WASM reader:', e);
   } finally {
     isPreloadingWasm = false;
   }
-  return { readBarcodesFromImageData: cachedZxingReader!, readBarcodes: cachedReadBarcodes! };
+
+  return {
+    readBarcodesFromImageData: cachedZxingReader!,
+    readBarcodes: cachedReadBarcodes!,
+    initDurationMs: wasmInitDurationMs,
+  };
 }
 
-// Kích hoạt preload ngay khi file được nạp ở client
+// Kích hoạt preload ngay khi module được nạp
 if (typeof window !== 'undefined') {
   setTimeout(() => {
-    getNativeBarcodeDetector();
     getOrPreloadWasm();
   }, 40);
 }
 
-// Âm thanh bíp xác nhận tức thì (Web Audio API, độ trễ 0ms)
+// Âm thanh bíp xác nhận tức thì (Web Audio API, 0ms latency)
 function playScannerBeep() {
   if (typeof window === 'undefined') return;
   try {
@@ -115,7 +132,7 @@ function playScannerBeep() {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(1760, ctx.currentTime); // Âm bíp tần số 1760Hz đanh, rõ
+    osc.frequency.setValueAtTime(1760, ctx.currentTime);
     gain.gain.setValueAtTime(0.25, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
     osc.connect(gain);
@@ -138,24 +155,68 @@ export default function ScannerModal({
   const [isLoadingCamera, setIsLoadingCamera] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [scannedBatch, setScannedBatch] = useState<ScannedBatchItem[]>([]);
-  const [detectedLatencyMs, setDetectedLatencyMs] = useState<number | null>(null);
-  const [detectedFormat, setDetectedFormat] = useState<string | null>(null);
-  const [activeEngine, setActiveEngine] = useState<'hardware' | 'wasm'>('wasm');
-  const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
-  const [currentDeviceIndex, setCurrentDeviceIndex] = useState<number>(0);
+  const [continuousToast, setContinuousToast] = useState<string | null>(null);
+  const [scanIdleSeconds, setScanIdleSeconds] = useState<number>(0);
+
+  // Bộ chọn định dạng quét: Mặc định tối ưu cho tem Serial máy tính / linh kiện
+  const [formatMode, setFormatMode] = useState<'serial' | 'all'>('serial');
+
+  // Camera capabilities thực tế (chỉ hiện nút nếu phần cứng có hỗ trợ)
   const [hasTorch, setHasTorch] = useState<boolean>(false);
   const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
   const [hasZoom, setHasZoom] = useState<boolean>(false);
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [zoomMinMax, setZoomMinMax] = useState<{ min: number; max: number; step: number }>({ min: 1, max: 2, step: 0.1 });
-  const [inAppNotice, setInAppNotice] = useState(false);
-  const [continuousToast, setContinuousToast] = useState<string | null>(null);
-  const [scanIdleSeconds, setScanIdleSeconds] = useState<number>(0);
+  const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
+  const [currentDeviceIndex, setCurrentDeviceIndex] = useState<number>(0);
 
+  // Hiển thị bảng đo lường Telemetry (Đo độc lập từng công đoạn)
+  const [showTelemetry, setShowTelemetry] = useState<boolean>(false);
+  const [telemetry, setTelemetry] = useState<ScannerTelemetry>({
+    cameraOpenMs: null,
+    wasmInitMs: null,
+    cropTimeMs: 0,
+    decodeTimeMs: 0,
+    timeToDetectMs: null,
+    actualResolution: '---',
+    cameraLabel: '---',
+    fps: 0,
+    totalFramesScanned: 0,
+    activeGear: 'fast',
+  });
+
+  // Refs điều khiển luồng & DOM
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoContainerRef = useRef<HTMLDivElement | null>(null);
+  const viewfinderBoxRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const scanLoopActiveRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Cờ điều khiển decode in-flight (Tuyệt đối không xếp hàng frame cũ)
+  const scanLoopActiveRef = useRef(false);
+  const isDecodingRef = useRef(false);
+  const isHandlingDetectionRef = useRef(false);
+  const animationFrameRef = useRef<number | null>(null);
+
+  // Timers đo lường độc lập
+  const scanStartTimestampRef = useRef<number>(0);
+  const metricsRef = useRef<ScannerTelemetry>({
+    cameraOpenMs: null,
+    wasmInitMs: null,
+    cropTimeMs: 0,
+    decodeTimeMs: 0,
+    timeToDetectMs: null,
+    actualResolution: '---',
+    cameraLabel: '---',
+    fps: 0,
+    totalFramesScanned: 0,
+    activeGear: 'fast',
+  });
+  const lastFpsTimeRef = useRef<number>(0);
+  const framesInSecondRef = useRef<number>(0);
+  const lastTelemetrySyncRef = useRef<number>(0);
+
+  // Đếm giây idle cho hướng dẫn
   useEffect(() => {
     if (!cameraActive) {
       setScanIdleSeconds(0);
@@ -166,15 +227,12 @@ export default function ScannerModal({
     }, 1000);
     return () => clearInterval(timer);
   }, [cameraActive]);
-  const isDecodingRef = useRef(false);
-  const isHandlingDetectionRef = useRef(false);
-  const scanStartTimeRef = useRef(0);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
 
-  // ─── Dừng camera & vòng lặp quét ─────────────────────────────────────────
+  // ─── Dừng camera & giải phóng tài nguyên ─────────────────────────────────
   const stopCamera = useCallback(() => {
     scanLoopActiveRef.current = false;
+    isDecodingRef.current = false;
+
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
@@ -202,29 +260,9 @@ export default function ScannerModal({
     setContinuousToast(null);
   }, []);
 
-  // ─── Chụp khung hình đối chiếu (bằng chứng) siêu tốc ─────────────────────
-  const captureFrame = useCallback((): string | null => {
-    const video = videoRef.current;
-    if (!video || video.videoWidth === 0 || video.videoHeight === 0) return null;
-    try {
-      // Downscale nhẹ về 480px: Giảm thời gian nén từ ~50ms xuống ~3ms, triệt tiêu giật lag UI
-      const targetW = 480;
-      const targetH = Math.round((video.videoHeight / video.videoWidth) * targetW);
-      const canvas = document.createElement('canvas');
-      canvas.width = targetW;
-      canvas.height = targetH;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return null;
-      ctx.drawImage(video, 0, 0, targetW, targetH);
-      return canvas.toDataURL('image/jpeg', 0.82);
-    } catch {
-      return null;
-    }
-  }, []);
-
-  // ─── Xử lý khi phát hiện mã: TỰ ĐỘNG CHỤP ẢNH & GOM VÀO DANH SÁCH ─────────
+  // ─── Xử lý khi phát hiện mã: Lưu chính xác ảnh dùng để decode ────────────
   const onCodeFound = useCallback(
-    (code: string, format?: string, customPhoto?: string) => {
+    (code: string, format?: string, exactDecodedPhoto?: string) => {
       if (isHandlingDetectionRef.current) return;
       isHandlingDetectionRef.current = true;
       setScanIdleSeconds(0);
@@ -235,11 +273,16 @@ export default function ScannerModal({
         return;
       }
 
-      const latency = scanStartTimeRef.current > 0 ? Math.round(performance.now() - scanStartTimeRef.current) : null;
-      setDetectedLatencyMs(latency);
-      if (format) setDetectedFormat(format);
+      // Ghi nhận thời gian từ khi mã nằm rõ trong khung đến khi decode thành công
+      const timeToDetect =
+        scanStartTimestampRef.current > 0
+          ? Math.round(performance.now() - scanStartTimestampRef.current)
+          : null;
 
-      // Âm thanh bíp tức thì & rung phản hồi haptic
+      metricsRef.current.timeToDetectMs = timeToDetect;
+      setTelemetry({ ...metricsRef.current });
+
+      // Âm thanh bíp tức thì & rung phản hồi
       playScannerBeep();
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         try {
@@ -247,15 +290,13 @@ export default function ScannerModal({
         } catch {}
       }
 
-      const photo = customPhoto || captureFrame();
-
       setScannedBatch((prev) => {
         const exists = prev.some((item) => item.code.toLowerCase() === trimmed.toLowerCase());
         if (exists) {
           setContinuousToast(`⚠️ Đã có trong danh sách: ${trimmed}`);
           setTimeout(() => {
             setContinuousToast(null);
-            scanStartTimeRef.current = performance.now();
+            scanStartTimestampRef.current = performance.now();
             isHandlingDetectionRef.current = false;
           }, 900);
           return prev;
@@ -263,7 +304,7 @@ export default function ScannerModal({
 
         const newItem: ScannedBatchItem = {
           code: trimmed,
-          photo: photo || undefined,
+          photo: exactDecodedPhoto || undefined,
           format: format || 'BARCODE',
           timestamp: Date.now(),
         };
@@ -271,47 +312,91 @@ export default function ScannerModal({
         const updated = [newItem, ...prev];
         setContinuousToast(`✓ Đã quét: ${trimmed} (${updated.length} mã)`);
 
-        // Cooldown siêu nhạy 400ms: Sau khi bíp, camera lập tức sẵn sàng quét mã kế tiếp
+        // Cooldown siêu nhạy 400ms: Sẵn sàng quét mã tiếp theo
         setTimeout(() => {
           setContinuousToast(null);
-          scanStartTimeRef.current = performance.now();
+          scanStartTimestampRef.current = performance.now();
           isHandlingDetectionRef.current = false;
         }, 400);
 
         return updated;
       });
     },
-    [captureFrame]
+    []
   );
 
-  // ─── Động cơ quét Hybrid kép: Native Hardware AI + ZXing C++ WASM Turbo ──
+  // ─── TÍNH TOÁN VÙNG QUÉT ROI CHÍNH XÁC THEO OBJECT-FIT: COVER ────────────
+  // Mọi barcode nằm ngoài khung ngắm đều bị loại bỏ, chống nhận nhầm khi tem có nhiều mã
+  const calculateExactRoi = useCallback(() => {
+    const video = videoRef.current;
+    const container = videoContainerRef.current;
+    const box = viewfinderBoxRef.current;
+
+    if (!video || !container || !box) return null;
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (vw <= 0 || vh <= 0) return null;
+
+    const containerRect = container.getBoundingClientRect();
+    const boxRect = box.getBoundingClientRect();
+    const cw = containerRect.width;
+    const ch = containerRect.height;
+    if (cw <= 0 || ch <= 0) return null;
+
+    // Tỷ lệ co giãn của video khi áp dụng CSS object-fit: cover
+    const scale = Math.max(cw / vw, ch / vh);
+    const renderedW = vw * scale;
+    const renderedH = vh * scale;
+
+    // Khoảng video bị tràn ra ngoài viền khung chứa
+    const offsetX = (renderedW - cw) / 2;
+    const offsetY = (renderedH - ch) / 2;
+
+    // Tọa độ khung ngắm bên trong container
+    const boxX = boxRect.left - containerRect.left;
+    const boxY = boxRect.top - containerRect.top;
+    const boxW = boxRect.width;
+    const boxH = boxRect.height;
+
+    // Quy đổi chính xác sang pixel thực của cảm biến camera (1:1 Native Resolution)
+    const rawCropX = (boxX + offsetX) / scale;
+    const rawCropY = (boxY + offsetY) / scale;
+    const rawCropW = boxW / scale;
+    const rawCropH = boxH / scale;
+
+    const cropX = Math.max(0, Math.floor(rawCropX));
+    const cropY = Math.max(0, Math.floor(rawCropY));
+    const cropW = Math.min(vw - cropX, Math.ceil(rawCropW));
+    const cropH = Math.min(vh - cropY, Math.ceil(rawCropH));
+
+    if (cropW <= 20 || cropH <= 20) return null;
+
+    return { cropX, cropY, cropW, cropH };
+  }, []);
+
+  // ─── VÒNG QUÉT ZXING C++ WASM CHUẨN KỸ THUẬT (ĐO LƯỜNG TÁCH BIỆT) ────────
   const startScanLoop = useCallback(async () => {
     scanLoopActiveRef.current = true;
     isDecodingRef.current = false;
 
-    // Chuẩn bị song song cả 2 động cơ
-    const [nativeDetector, wasmModule] = await Promise.all([
-      getNativeBarcodeDetector(),
-      getOrPreloadWasm(),
-    ]);
+    // 1. Khởi tạo WASM module (đo thời gian khởi tạo độc lập)
+    const wasmResult = await getOrPreloadWasm();
+    const { readBarcodesFromImageData, initDurationMs } = wasmResult;
+    metricsRef.current.wasmInitMs = initDurationMs;
 
-    if (nativeDetector) {
-      setActiveEngine('hardware');
-    } else {
-      setActiveEngine('wasm');
-    }
-
-    const { readBarcodesFromImageData } = wasmModule;
-
-    // Canvas tĩnh tái sử dụng (Zero garbage allocation) cho WASM fallback
+    // 2. Tạo Canvas tĩnh tái sử dụng (Zero garbage allocation)
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
 
-    scanStartTimeRef.current = performance.now();
-    let frameCounter = 0;
-    let lastDecodeTime = 0;
-    const FRAME_INTERVAL_MS = 25; // Điều tiết nhịp ~35-40 FPS, chống quá nhiệt điện thoại
+    scanStartTimestampRef.current = performance.now();
+    lastFpsTimeRef.current = performance.now();
+    framesInSecondRef.current = 0;
+    lastTelemetrySyncRef.current = 0;
+
+    let totalFrames = 0;
+    let lastFrameTime = 0;
+    const FRAME_PACING_MS = 25; // Điều tiết nhịp ~35-40 FPS, chống quá nhiệt
 
     const processFrame = async () => {
       if (!scanLoopActiveRef.current || isHandlingDetectionRef.current) return;
@@ -319,80 +404,108 @@ export default function ScannerModal({
       const video = videoRef.current;
       const now = performance.now();
 
+      // Chỉ xử lý 1 decode in-flight tại 1 thời điểm; bỏ qua frame nếu đang bận
       if (
         video &&
         video.readyState >= 2 &&
         !video.paused &&
         !isDecodingRef.current &&
-        now - lastDecodeTime >= FRAME_INTERVAL_MS
+        now - lastFrameTime >= FRAME_PACING_MS &&
+        readBarcodesFromImageData
       ) {
-        lastDecodeTime = now;
+        lastFrameTime = now;
         isDecodingRef.current = true;
+        totalFrames++;
+        framesInSecondRef.current++;
+
+        // Đo FPS mỗi giây
+        if (now - lastFpsTimeRef.current >= 1000) {
+          metricsRef.current.fps = framesInSecondRef.current;
+          metricsRef.current.totalFramesScanned = totalFrames;
+          framesInSecondRef.current = 0;
+          lastFpsTimeRef.current = now;
+        }
 
         try {
-          // ── BƯỚC 1: QUÉT TRỰC TIẾP QUA NATIVE GPU / APPLE NEURAL ENGINE (< 12ms) ──
-          if (nativeDetector) {
-            try {
-              const detected = await nativeDetector.detect(video);
-              if (detected && detected.length > 0 && detected[0]?.rawValue) {
-                onCodeFound(detected[0].rawValue, detected[0].format || 'BARCODE');
-                return;
-              }
-            } catch {
-              // Nếu frame bị lỗi lướt nhanh thì bỏ qua sang WASM
-            }
-          }
-
-          // ── BƯỚC 2: FALLBACK SANG ZXING C++ WASM TURBO (1:1 PIXEL GỐC, KHÔNG DOWNSCALE) ─
           const vw = video.videoWidth;
           const vh = video.videoHeight;
-          if (vw > 0 && vh > 0 && readBarcodesFromImageData) {
-            frameCounter++;
 
-            // QUÉT NGUYÊN BẢN 1:1 PIXEL (BẢO TOÀN TUYỆT ĐỐI CÁC ĐƯỜNG KẺ MÃ VẠCH 1PX):
-            // Pass 1: Cắt trọng tâm 75% rộng x 55% cao ở độ phân giải 1:1 gốc của cảm biến
-            // Pass 2: Quét toàn cảnh cảm biến gốc
-            const isCenterCropPass = frameCounter % 2 === 0;
+          if (vw > 0 && vh > 0) {
+            // Cập nhật độ phân giải thực tế
+            metricsRef.current.actualResolution = `${vw}x${vh}`;
 
-            if (isCenterCropPass) {
+            // ── BƯỚC A: ĐO THỜI GIAN LẤY & CẮT ẢNH THEO ROI ─────────────────
+            const tCropStart = performance.now();
+            const roi = calculateExactRoi();
+
+            let targetW: number;
+            let targetH: number;
+
+            // Luân phiên: Pass 1 cắt ROI chính xác 1:1; Pass 2 mở rộng 15% để bắt góc mép
+            const isStrictRoi = totalFrames % 2 === 1;
+
+            if (roi && isStrictRoi) {
+              targetW = roi.cropW;
+              targetH = roi.cropH;
+              if (canvas.width !== targetW || canvas.height !== targetH) {
+                canvas.width = targetW;
+                canvas.height = targetH;
+              }
+              ctx.drawImage(video, roi.cropX, roi.cropY, roi.cropW, roi.cropH, 0, 0, targetW, targetH);
+            } else {
+              // Vùng trung tâm 75% rộng x 55% cao ở độ phân giải 1:1 gốc
               const cropW = Math.round(vw * 0.75);
               const cropH = Math.round(vh * 0.55);
               const cropX = Math.round((vw - cropW) / 2);
               const cropY = Math.round((vh - cropH) / 2);
 
-              if (canvas.width !== cropW || canvas.height !== cropH) {
-                canvas.width = cropW;
-                canvas.height = cropH;
+              targetW = cropW;
+              targetH = cropH;
+              if (canvas.width !== targetW || canvas.height !== targetH) {
+                canvas.width = targetW;
+                canvas.height = targetH;
               }
-              ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-            } else {
-              if (canvas.width !== vw || canvas.height !== vh) {
-                canvas.width = vw;
-                canvas.height = vh;
-              }
-              ctx.drawImage(video, 0, 0, vw, vh);
+              ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH);
             }
 
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, targetW, targetH);
+            const cropDuration = Math.round((performance.now() - tCropStart) * 10) / 10;
+            metricsRef.current.cropTimeMs = cropDuration;
 
-            // BẬT TOÀN DIỆN MỌI CỜ TRÊN MỌI FRAME (Tốc độ C++ WASM cực nhanh chỉ 3-8ms):
-            // - tryHarder: true (tìm kiếm đa tỷ lệ)
-            // - tryRotate: true (nhận diện cả góc nghiêng 45° hay dọc/ngang)
-            // - tryInvert: true (nhận diện tem bạc phản quang / tem đen trắng)
-            // - tryDownscale: true (thuật toán lọc vạch C++ nội bộ)
-            // - binarizer: 'LocalAverage' (xử lý bóng mờ, chói sáng môi trường văn phòng)
+            // ── BƯỚC B: ĐO THỜI GIAN DECODE CỦA ZXING C++ WASM ──────────────
+            // Cấu hình nhanh (Gear 1): tryHarder = false, chỉ thử xoay nhanh (2-3ms)
+            // Cấu hình sâu (Gear 2, sau 350ms hoặc mỗi 3 frame): tryHarder = true, tryInvert = true
+            const elapsedSinceStart = performance.now() - scanStartTimestampRef.current;
+            const useDeepGear = elapsedSinceStart > 350 || totalFrames % 3 === 0;
+            metricsRef.current.activeGear = useDeepGear ? 'deep' : 'fast';
+
+            const activeFormats =
+              formatMode === 'serial' ? HARDWARE_SERIAL_FORMATS : ALL_FORMATS;
+
+            const tDecodeStart = performance.now();
             const results = await readBarcodesFromImageData(imageData, {
-              formats: ['Code128', 'Code39', 'EAN-13', 'QRCode', 'UPC-A', 'ITF', 'Codabar'],
-              tryHarder: true,
+              formats: activeFormats,
+              tryHarder: useDeepGear,
               tryRotate: true,
-              tryInvert: true,
-              tryDownscale: true,
+              tryInvert: useDeepGear,
+              tryDownscale: useDeepGear,
               binarizer: 'LocalAverage',
               maxNumberOfSymbols: 1,
             });
 
+            const decodeDuration = Math.round((performance.now() - tDecodeStart) * 10) / 10;
+            metricsRef.current.decodeTimeMs = decodeDuration;
+
+            // Đồng bộ telemetry lên UI định kỳ mỗi 500ms (Không setState mỗi frame!)
+            if (now - lastTelemetrySyncRef.current >= 500) {
+              lastTelemetrySyncRef.current = now;
+              setTelemetry({ ...metricsRef.current });
+            }
+
+            // ── BƯỚC C: NẾU THÀNH CÔNG, LẤY CHÍNH XÁC KHUNG HÌNH VỪA DECODE ──
             if (results && results.length > 0 && results[0]?.text) {
-              onCodeFound(results[0].text, results[0].format);
+              const exactPhoto = canvas.toDataURL('image/jpeg', 0.85);
+              onCodeFound(results[0].text, results[0].format, exactPhoto);
               return;
             }
           }
@@ -409,9 +522,9 @@ export default function ScannerModal({
     };
 
     animationFrameRef.current = requestAnimationFrame(processFrame);
-  }, [onCodeFound]);
+  }, [calculateExactRoi, formatMode, onCodeFound]);
 
-  // ─── Khởi động camera tức thì (Không delay) ──────────────────────────────
+  // ─── KHỞI ĐỘNG CAMERA & ĐO THỜI GIAN MỞ CAMERA ĐỘC LẬP ──────────────────
   const startCamera = useCallback(
     async (specificDeviceId?: string) => {
       stopCamera();
@@ -419,24 +532,11 @@ export default function ScannerModal({
       setCameraError(null);
       setIsLoadingCamera(true);
       setCameraActive(false);
-      setDetectedLatencyMs(null);
-      setDetectedFormat(null);
       isHandlingDetectionRef.current = false;
 
-      // Kiểm tra HTTPS
-      if (typeof window !== 'undefined') {
-        const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname);
-        if (!window.isSecureContext && !isLocal) {
-          setCameraError('Camera yêu cầu bảo mật HTTPS. Vui lòng mở trang web qua link https://');
-          setIsLoadingCamera(false);
-          return;
-        }
-        const ua = navigator.userAgent || '';
-        if (/FBAN|FBAV|Instagram|Zalo|Line|MicroMessenger/i.test(ua)) {
-          setInAppNotice(true);
-        }
-      }
+      const tCameraStart = performance.now();
 
+      // Kiểm tra hỗ trợ MediaDevices
       if (!navigator?.mediaDevices?.getUserMedia) {
         setCameraError('Trình duyệt không hỗ trợ mở camera trực tiếp. Hãy bấm "📷 Chụp ảnh bằng máy" bên dưới.');
         setIsLoadingCamera(false);
@@ -471,35 +571,38 @@ export default function ScannerModal({
 
         streamRef.current = stream;
 
-        // Lấy danh sách camera
+        // Lấy danh sách camera thực tế
         try {
           const devices = await navigator.mediaDevices.enumerateDevices();
           setAvailableDevices(devices.filter((d) => d.kind === 'videoinput'));
         } catch {}
 
-        // Kiểm tra đèn pin, Zoom & kích hoạt lấy nét liên tục (Continuous Autofocus)
+        // Kiểm tra capabilities THỰC TẾ của camera (Torch, Zoom, Focus)
         const videoTrack = stream.getVideoTracks()[0];
         if (videoTrack) {
+          metricsRef.current.cameraLabel = videoTrack.label || 'Camera sau';
           try {
             const capabilities = videoTrack.getCapabilities?.() as any;
-            if (capabilities && capabilities.torch) {
-              setHasTorch(true);
-            }
-            if (capabilities && capabilities.zoom) {
-              setHasZoom(true);
-              setZoomMinMax({
-                min: capabilities.zoom.min || 1,
-                max: capabilities.zoom.max || 5,
-                step: capabilities.zoom.step || 0.1,
-              });
-              setZoomLevel(1);
-            } else {
-              setHasZoom(false);
-            }
-            if (capabilities && capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
-              await (videoTrack as any).applyConstraints({
-                advanced: [{ focusMode: 'continuous' }],
-              });
+            if (capabilities) {
+              setHasTorch(Boolean(capabilities.torch));
+
+              if (capabilities.zoom) {
+                setHasZoom(true);
+                setZoomMinMax({
+                  min: capabilities.zoom.min || 1,
+                  max: capabilities.zoom.max || 5,
+                  step: capabilities.zoom.step || 0.1,
+                });
+                setZoomLevel(1);
+              } else {
+                setHasZoom(false);
+              }
+
+              if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+                await (videoTrack as any).applyConstraints({
+                  advanced: [{ focusMode: 'continuous' }],
+                });
+              }
             }
           } catch {}
         }
@@ -518,10 +621,15 @@ export default function ScannerModal({
         videoEl.srcObject = stream;
 
         await videoEl.play();
+
+        // Ghi nhận thời gian mở camera độc lập
+        metricsRef.current.cameraOpenMs = Math.round(performance.now() - tCameraStart);
+        setTelemetry({ ...metricsRef.current });
+
         setIsLoadingCamera(false);
         setCameraActive(true);
 
-        // Khởi động vòng quét siêu tốc Hybrid
+        // Bắt đầu vòng quét WASM
         startScanLoop();
       } catch (err: any) {
         console.error('Lỗi getUserMedia:', err);
@@ -554,7 +662,7 @@ export default function ScannerModal({
     }
   };
 
-  // ─── Phóng to 2x (Hardware Zoom) để lấy nét cự ly xa ───────────────────────
+  // ─── Phóng to 2x (Hardware Zoom thật từ sensor) ──────────────────────────
   const handleToggleZoom = async () => {
     const track = streamRef.current?.getVideoTracks()[0];
     if (!track || !hasZoom) return;
@@ -565,7 +673,7 @@ export default function ScannerModal({
       });
       setZoomLevel(nextZoom);
     } catch (e) {
-      console.warn('Lỗi đổi zoom:', e);
+      console.warn('Lỗi đổi zoom phần cứng:', e);
     }
   };
 
@@ -580,7 +688,7 @@ export default function ScannerModal({
     }
   };
 
-  // ─── Chụp ảnh bằng máy gốc (Độ nét cao nhất) ────────────────────────────
+  // ─── Chụp ảnh bằng máy gốc (Fallback độ nét cao) ─────────────────────────
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -597,8 +705,11 @@ export default function ScannerModal({
         try {
           const { readBarcodes } = await getOrPreloadWasm();
 
+          const activeFormats =
+            formatMode === 'serial' ? HARDWARE_SERIAL_FORMATS : ALL_FORMATS;
+
           const results = await readBarcodes(file, {
-            formats: ['Code128', 'EAN-13', 'Code39', 'QRCode'],
+            formats: activeFormats,
             tryHarder: true,
             tryRotate: true,
             tryInvert: true,
@@ -630,14 +741,10 @@ export default function ScannerModal({
     if (isOpen) {
       setScannedBatch([]);
       setManualCode('');
-      setDetectedLatencyMs(null);
-      setDetectedFormat(null);
       setCameraError(null);
-      setInAppNotice(false);
       setContinuousToast(null);
       isHandlingDetectionRef.current = false;
 
-      // Khởi động tức thì (chỉ 20ms để DOM mount)
       const timer = setTimeout(() => {
         startCamera();
       }, 20);
@@ -657,7 +764,6 @@ export default function ScannerModal({
     if (!trimmed) return;
 
     playScannerBeep();
-    const photo = captureFrame();
 
     setScannedBatch((prev) => {
       const exists = prev.some((item) => item.code.toLowerCase() === trimmed.toLowerCase());
@@ -668,7 +774,6 @@ export default function ScannerModal({
       }
       const newItem: ScannedBatchItem = {
         code: trimmed,
-        photo: photo || undefined,
         format: 'MANUAL',
         timestamp: Date.now(),
       };
@@ -710,18 +815,30 @@ export default function ScannerModal({
                   padding: '2px 7px',
                   borderRadius: 4,
                   fontWeight: 600,
-                  background: activeEngine === 'hardware' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-                  color: activeEngine === 'hardware' ? '#4ade80' : '#60a5fa',
-                  border: activeEngine === 'hardware' ? '1px solid rgba(34, 197, 94, 0.3)' : '1px solid rgba(59, 130, 246, 0.3)',
+                  background: 'rgba(59, 130, 246, 0.15)',
+                  color: '#60a5fa',
+                  border: '1px solid rgba(59, 130, 246, 0.3)',
                 }}
               >
-                {activeEngine === 'hardware' ? '⚡ Apple/Chrome Hardware AI (< 15ms)' : '⚙️ ZXing C++ WASM Turbo (< 30ms)'}
+                ⚙️ {ZXING_ENGINE_INFO.package} v{ZXING_ENGINE_INFO.version} (C++ WASM)
               </span>
-              {detectedLatencyMs !== null && (
-                <span style={{ fontSize: '0.68rem', color: '#a7f3d0' }}>
-                  ⏱️ {detectedLatencyMs}ms
-                </span>
-              )}
+              <button
+                type="button"
+                onClick={() => setShowTelemetry((s) => !s)}
+                style={{
+                  background: showTelemetry ? 'rgba(34, 197, 94, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  color: showTelemetry ? '#4ade80' : 'var(--text-muted)',
+                  borderRadius: 4,
+                  fontSize: '0.68rem',
+                  padding: '1px 6px',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+                title="Bật/Tắt bảng đo lường hiệu năng decoder theo từng công đoạn"
+              >
+                📊 Đo lường {showTelemetry ? '▼' : '▶'}
+              </button>
             </div>
           </div>
           <button
@@ -739,25 +856,87 @@ export default function ScannerModal({
           </button>
         </div>
 
-        {/* Cảnh báo in-app browser */}
-        {inAppNotice && (
+        {/* BẢNG ĐO LƯỜNG TELEMETRY (ĐO TÁCH BIỆT TỪNG CÔNG ĐOẠN) */}
+        {showTelemetry && (
           <div
             style={{
-              fontSize: '0.75rem',
-              background: '#3b2505',
-              color: '#fed7aa',
-              padding: '6px 10px',
+              background: '#090d16',
+              border: '1px solid rgba(59, 130, 246, 0.3)',
               borderRadius: 'var(--radius-sm)',
-              marginTop: 4,
+              padding: '8px 10px',
+              fontSize: '0.72rem',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, 1fr)',
+              gap: '4px 8px',
+              marginTop: 6,
+              color: '#cbd5e1',
             }}
           >
-            ⚠️ Đang mở trong ứng dụng khác. Hãy bấm menu ⋮ → <strong>Mở bằng Safari / Chrome</strong> để quét nhanh nhất.
+            <div>
+              📷 Mở camera: <strong style={{ color: '#93c5fd' }}>{telemetry.cameraOpenMs !== null ? `${telemetry.cameraOpenMs}ms` : '---'}</strong>
+            </div>
+            <div>
+              ⚡ Nạp WASM: <strong style={{ color: '#93c5fd' }}>{telemetry.wasmInitMs !== null ? `${telemetry.wasmInitMs}ms` : '0ms'}</strong>
+            </div>
+            <div>
+              ✂️ Lấy & Cắt ROI: <strong style={{ color: '#a7f3d0' }}>{telemetry.cropTimeMs}ms</strong>
+            </div>
+            <div>
+              🧩 Decode frame: <strong style={{ color: '#a7f3d0' }}>{telemetry.decodeTimeMs}ms</strong>
+            </div>
+            <div>
+              ⏱️ Nhận diện (First-sight): <strong style={{ color: '#fde047' }}>{telemetry.timeToDetectMs !== null ? `${telemetry.timeToDetectMs}ms` : 'Đang quét...'}</strong>
+            </div>
+            <div>
+              🎯 Gear: <strong style={{ color: telemetry.activeGear === 'fast' ? '#4ade80' : '#f59e0b' }}>{telemetry.activeGear.toUpperCase()}</strong> ({telemetry.fps} FPS)
+            </div>
+            <div style={{ gridColumn: 'span 2', fontSize: '0.68rem', color: 'var(--text-muted)', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 4 }}>
+              Cảm biến: {telemetry.actualResolution} • Cam: {telemetry.cameraLabel}
+            </div>
           </div>
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 6 }}>
+          {/* Thanh chuyển chế độ lọc định dạng barcode */}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Mục tiêu:</span>
+            <button
+              type="button"
+              onClick={() => setFormatMode('serial')}
+              style={{
+                fontSize: '0.72rem',
+                padding: '3px 8px',
+                borderRadius: 4,
+                border: formatMode === 'serial' ? '1px solid #3b82f6' : '1px solid rgba(255,255,255,0.15)',
+                background: formatMode === 'serial' ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                color: formatMode === 'serial' ? '#93c5fd' : 'var(--text-muted)',
+                fontWeight: formatMode === 'serial' ? 700 : 400,
+                cursor: 'pointer',
+              }}
+            >
+              🏷️ Serial tem máy (Code128, 39, QR)
+            </button>
+            <button
+              type="button"
+              onClick={() => setFormatMode('all')}
+              style={{
+                fontSize: '0.72rem',
+                padding: '3px 8px',
+                borderRadius: 4,
+                border: formatMode === 'all' ? '1px solid #3b82f6' : '1px solid rgba(255,255,255,0.15)',
+                background: formatMode === 'all' ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                color: formatMode === 'all' ? '#93c5fd' : 'var(--text-muted)',
+                fontWeight: formatMode === 'all' ? 700 : 400,
+                cursor: 'pointer',
+              }}
+            >
+              🌐 Tất cả mã (+EAN/UPC)
+            </button>
+          </div>
+
           {/* Vùng chứa camera Scanner */}
           <div
+            ref={videoContainerRef}
             style={{
               position: 'relative',
               width: '100%',
@@ -770,7 +949,7 @@ export default function ScannerModal({
               justifyContent: 'center',
             }}
           >
-            {/* Thẻ video luồng camera mượt mà */}
+            {/* Thẻ video luồng camera */}
             <video
               ref={videoRef}
               autoPlay
@@ -798,8 +977,9 @@ export default function ScannerModal({
                   zIndex: 4,
                 }}
               >
-                {/* Khung chữ nhật ngang tối ưu cho mã vạch 1D */}
+                {/* Khung chữ nhật ngang khớp 100% với ROI của decoder */}
                 <div
+                  ref={viewfinderBoxRef}
                   style={{
                     position: 'relative',
                     width: '84%',
@@ -864,7 +1044,7 @@ export default function ScannerModal({
               </div>
             )}
 
-            {/* Nút Zoom nhanh 1x / 2x trên màn hình camera */}
+            {/* Nút Zoom nhanh 1x / 2x trên màn hình camera (Chỉ hiện nếu camera có hỗ trợ) */}
             {cameraActive && hasZoom && (
               <button
                 type="button"
@@ -885,7 +1065,7 @@ export default function ScannerModal({
                   backdropFilter: 'blur(6px)',
                   boxShadow: '0 2px 10px rgba(0,0,0,0.6)',
                 }}
-                title="Phóng to 2x để lấy nét các tem mã nhỏ ở khoảng cách 20-30cm"
+                title="Phóng to 2x phần cứng để lấy nét tem nhỏ ở khoảng cách xa"
               >
                 {zoomLevel > 1 ? '🔍 2x' : '🔍 1x'}
               </button>
@@ -1007,18 +1187,20 @@ export default function ScannerModal({
               <span>Chụp ảnh bằng máy</span>
             </button>
 
+            {/* Nút Zoom chỉ hiện khi capability thực tế hỗ trợ */}
             {hasZoom && (
               <button
                 type="button"
                 className={`btn ${zoomLevel > 1 ? 'btn-primary' : 'btn-secondary'}`}
                 style={{ padding: '8px 12px', fontSize: '0.85rem' }}
                 onClick={handleToggleZoom}
-                title="Phóng to 2x giúp đọc tem mã nhỏ siêu nét"
+                title="Phóng to 2x phần cứng giúp đọc tem mã nhỏ siêu nét"
               >
                 {zoomLevel > 1 ? '🔍 2x' : '🔍 1x'}
               </button>
             )}
 
+            {/* Nút Đèn pin chỉ hiện khi capability thực tế hỗ trợ */}
             {hasTorch && (
               <button
                 type="button"
@@ -1052,7 +1234,7 @@ export default function ScannerModal({
           </div>
         </div>
 
-        {/* DANH SÁCH MÃ ĐÃ QUÉT TRONG PHIÊN (BẰNG CHỨNG + ẢNH) */}
+        {/* DANH SÁCH MÃ ĐÃ QUÉT TRONG PHIÊN (BẰNG CHỨNG + ẢNH THẬT ĐÃ DECODE) */}
         {scannedBatch.length > 0 ? (
           <div
             style={{
@@ -1086,7 +1268,7 @@ export default function ScannerModal({
               </button>
             </div>
 
-            {/* Danh sách cuộn ngang có ảnh thumbnail */}
+            {/* Danh sách cuộn ngang có ảnh thumbnail bằng chứng */}
             <div
               style={{
                 display: 'flex',
@@ -1114,19 +1296,20 @@ export default function ScannerModal({
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={item.photo}
-                      alt="Snap"
+                      alt="Decoded Evidence"
                       style={{
-                        width: 38,
+                        width: 44,
                         height: 38,
                         objectFit: 'cover',
                         borderRadius: 4,
                         border: '1px solid var(--primary)',
                       }}
+                      title="Ảnh chụp chính xác từ canvas lúc decoder nhận diện thành công"
                     />
                   ) : (
                     <div
                       style={{
-                        width: 38,
+                        width: 44,
                         height: 38,
                         background: 'rgba(255,255,255,0.06)',
                         borderRadius: 4,
