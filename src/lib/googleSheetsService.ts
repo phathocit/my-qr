@@ -19,6 +19,34 @@ export function isGoogleSheetsConfigured(): boolean {
   );
 }
 
+export function normalizePrivateKey(rawKey: string): string {
+  let cleaned = rawKey.trim();
+  // Bỏ dấu nháy kép hoặc đơn bao quanh nếu có
+  if (
+    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+    (cleaned.startsWith("'") && cleaned.endsWith("'"))
+  ) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+  // Thay thế ký tự \n thoát chuỗi
+  cleaned = cleaned.replace(/\\n/g, '\n').replace(/\\r/g, '');
+
+  // Trích xuất chuỗi base64 thuần túy (loại bỏ header, footer và khoảng trắng)
+  const base64Body = cleaned
+    .replace(/-----BEGIN[ A-Z0-9_-]+-----/g, '')
+    .replace(/-----END[ A-Z0-9_-]+-----/g, '')
+    .replace(/\s+/g, '');
+
+  // Tái tạo chuẩn PKCS#8 PEM với độ dài 64 ký tự mỗi dòng
+  let pem = '-----BEGIN PRIVATE KEY-----\n';
+  for (let i = 0; i < base64Body.length; i += 64) {
+    pem += base64Body.slice(i, i + 64) + '\n';
+  }
+  pem += '-----END PRIVATE KEY-----\n';
+
+  return pem;
+}
+
 export function getSheetsClient(): { sheets: sheets_v4.Sheets; spreadsheetId: string } {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const rawKey = process.env.GOOGLE_PRIVATE_KEY;
@@ -30,8 +58,8 @@ export function getSheetsClient(): { sheets: sheets_v4.Sheets; spreadsheetId: st
     );
   }
 
-  // Khôi phục ký tự xuống dòng của RSA Private Key từ chuỗi .env
-  const privateKey = rawKey.replace(/\\n/g, '\n');
+  // Tự động chuẩn hóa và khôi phục định dạng PEM PKCS#8 bất kể người dùng dán 1 dòng hay nhiều dòng
+  const privateKey = normalizePrivateKey(rawKey);
   const auth = new google.auth.JWT({
     email,
     key: privateKey,
