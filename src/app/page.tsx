@@ -278,6 +278,72 @@ export default function HomePage() {
     }
   };
 
+  // --- BATCH SCANNER HANDLER (Quét liên tục & Gom danh sách) ---
+  const handleBatchDetected = (items: Array<{ code: string; photo?: string }>) => {
+    if (items.length === 0) return;
+
+    if (scannerTarget === 'inbound') {
+      const currentProd = products.find((p) => p.id === inboundProductId);
+      let added = 0;
+      let dup = 0;
+      setInboundItems((prev) => {
+        const next = [...prev];
+        for (const item of items) {
+          const isDup = next.some(
+            (i) => i.serial_number?.toLowerCase() === item.code.toLowerCase() || i.management_code.toLowerCase() === item.code.toLowerCase()
+          );
+          if (isDup) {
+            dup++;
+            continue;
+          }
+          next.unshift({
+            product_id: inboundProductId,
+            product_name: currentProd?.name || 'Sản phẩm',
+            management_code: `DEV-${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 90 + 10)}`,
+            serial_number: item.code,
+            technical_condition: inboundCondition,
+            photo: item.photo,
+          });
+          added++;
+        }
+        return next;
+      });
+      if (dup > 0) {
+        showNotice(`Đã thêm ${added} thiết bị vào phiếu nhập (${dup} mã đã trùng lặp)`, 'info');
+      } else {
+        showNotice(`Đã thêm ${added} thiết bị vào phiếu nhập`, 'success');
+      }
+    } else if (scannerTarget === 'outbound') {
+      let added = 0;
+      const validIds: string[] = [];
+      for (const item of items) {
+        const clean = item.code.trim().toLowerCase();
+        const dev = devices.find(
+          (d) => d.serial_number?.trim().toLowerCase() === clean || d.management_code.trim().toLowerCase() === clean
+        );
+        if (!dev) {
+          showNotice(`Không tìm thấy thiết bị có mã ${item.code}`, 'error');
+          continue;
+        }
+        const readiness = inventoryService.checkOutboundReadiness(dev);
+        if (!readiness.eligible) {
+          showNotice(`Không thể xuất ${dev.management_code}: ${readiness.reason}`, 'error');
+          continue;
+        }
+        validIds.push(dev.id);
+        added++;
+      }
+      setOutboundSelectedDevIds((prev) => Array.from(new Set([...prev, ...validIds])));
+      if (added > 0) {
+        showNotice(`Đã thêm ${added} thiết bị vào phiếu xuất`, 'success');
+      }
+    } else {
+      // Cho search, return, replace: lấy mã đầu tiên trong danh sách quét
+      const targetItem = items[0];
+      handleScanDetected(targetItem.code, targetItem.photo);
+    }
+  };
+
   // --- SEARCH HANDLER ---
   const handleSearch = async (query = searchQuery) => {
     if (!query.trim()) return;
@@ -781,13 +847,57 @@ export default function HomePage() {
         </div>
       </header>
 
-      {/* Notice Banner */}
+      {/* Floating Notice Toast (Luôn nổi trên mọi Modal và Overlay) */}
       {notification && (
-        <div style={{ padding: '8px 16px' }}>
-          <div className={`toast-notice ${notification.type}`}>
-            {notification.type === 'success' && '✓ '}
-            {notification.type === 'error' && '✕ '}
-            {notification.text}
+        <div
+          style={{
+            position: 'fixed',
+            top: 20,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 99999,
+            width: '92%',
+            maxWidth: 480,
+            pointerEvents: 'auto',
+            boxShadow: '0 12px 36px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.15)',
+            borderRadius: 'var(--radius-md)',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            className={`toast-notice ${notification.type}`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '12px 16px',
+              fontSize: '0.9rem',
+              fontWeight: 600,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: '1.2rem', lineHeight: 1 }}>
+                {notification.type === 'success' && '✓'}
+                {notification.type === 'error' && '✕'}
+                {notification.type === 'info' && 'ℹ'}
+              </span>
+              <span>{notification.text}</span>
+            </div>
+            <button
+              onClick={() => setNotification(null)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'inherit',
+                cursor: 'pointer',
+                fontSize: '1.3rem',
+                lineHeight: 1,
+                opacity: 0.8,
+                marginLeft: 12,
+              }}
+            >
+              &times;
+            </button>
           </div>
         </div>
       )}
@@ -2345,6 +2455,7 @@ export default function HomePage() {
         isOpen={scannerOpen}
         onClose={() => setScannerOpen(false)}
         onDetected={handleScanDetected}
+        onBatchDetected={handleBatchDetected}
         title={
           scannerTarget === 'search'
             ? 'Quét mã tra cứu'

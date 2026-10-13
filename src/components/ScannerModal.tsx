@@ -2,10 +2,18 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 
+export interface ScannedBatchItem {
+  code: string;
+  photo?: string;
+  format?: string;
+  timestamp: number;
+}
+
 interface ScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onDetected: (code: string, photoDataUrl?: string) => void;
+  onBatchDetected?: (items: ScannedBatchItem[]) => void;
   title?: string;
   allowManual?: boolean;
 }
@@ -84,6 +92,7 @@ export default function ScannerModal({
   isOpen,
   onClose,
   onDetected,
+  onBatchDetected,
   title = 'Quét mã Barcode / QR',
   allowManual = true,
 }: ScannerModalProps) {
@@ -91,19 +100,14 @@ export default function ScannerModal({
   const [cameraActive, setCameraActive] = useState(false);
   const [isLoadingCamera, setIsLoadingCamera] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [detectedCode, setDetectedCode] = useState<string | null>(null);
+  const [scannedBatch, setScannedBatch] = useState<ScannedBatchItem[]>([]);
   const [detectedLatencyMs, setDetectedLatencyMs] = useState<number | null>(null);
   const [detectedFormat, setDetectedFormat] = useState<string | null>(null);
-  const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
   const [currentDeviceIndex, setCurrentDeviceIndex] = useState<number>(0);
   const [hasTorch, setHasTorch] = useState<boolean>(false);
   const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
   const [inAppNotice, setInAppNotice] = useState(false);
-
-  // Chế độ quét liên tục (quét tự động nhiều kiện không cần đóng modal)
-  const isContinuousSupported = title.toLowerCase().includes('liên tục') || title.toLowerCase().includes('nhập kho');
-  const [continuousMode, setContinuousMode] = useState(isContinuousSupported);
   const [continuousToast, setContinuousToast] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -114,8 +118,6 @@ export default function ScannerModal({
   const scanStartTimeRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
-  const continuousModeRef = useRef(continuousMode);
-  continuousModeRef.current = continuousMode;
 
   // ─── Dừng camera & vòng lặp quét ─────────────────────────────────────────
   const stopCamera = useCallback(() => {
@@ -162,7 +164,7 @@ export default function ScannerModal({
     }
   }, []);
 
-  // ─── Xử lý khi phát hiện mã ──────────────────────────────────────────────
+  // ─── Xử lý khi phát hiện mã: TỰ ĐỘNG CHỤP ẢNH & GOM VÀO DANH SÁCH ─────────
   const onCodeFound = useCallback(
     (code: string, format?: string, customPhoto?: string) => {
       if (isHandlingDetectionRef.current) return;
@@ -188,27 +190,39 @@ export default function ScannerModal({
 
       const photo = customPhoto || captureFrame();
 
-      // NẾU BẬT CHẾ ĐỘ QUÉT LIÊN TỤC:
-      // Tự động đẩy mã vào danh sách ngay lập tức, giữ camera mở, cooldown 1.2s rồi quét tiếp
-      if (continuousModeRef.current) {
-        onDetected(trimmed, photo || undefined);
-        setContinuousToast(`✓ Đã thêm: ${trimmed} (${latency ? latency + 'ms' : 'nhanh'})`);
+      setScannedBatch((prev) => {
+        const exists = prev.some((item) => item.code.toLowerCase() === trimmed.toLowerCase());
+        if (exists) {
+          setContinuousToast(`⚠️ Đã có trong danh sách: ${trimmed}`);
+          setTimeout(() => {
+            setContinuousToast(null);
+            scanStartTimeRef.current = performance.now();
+            isHandlingDetectionRef.current = false;
+          }, 1100);
+          return prev;
+        }
 
-        // Cooldown 1.2 giây để người dùng di chuyển camera sang kiện hàng tiếp theo
+        const newItem: ScannedBatchItem = {
+          code: trimmed,
+          photo: photo || undefined,
+          format: format || 'BARCODE',
+          timestamp: Date.now(),
+        };
+
+        const updated = [newItem, ...prev];
+        setContinuousToast(`✓ Đã quét: ${trimmed} (${updated.length} mã)`);
+
+        // Camera tiếp tục quét liên tục sau 850ms cooldown
         setTimeout(() => {
           setContinuousToast(null);
           scanStartTimeRef.current = performance.now();
           isHandlingDetectionRef.current = false;
-        }, 1200);
-        return;
-      }
+        }, 850);
 
-      // CHẾ ĐỘ THƯỜNG (Có màn hình xác nhận)
-      stopCamera();
-      setDetectedCode(trimmed);
-      if (photo) setCapturedPhoto(photo);
+        return updated;
+      });
     },
-    [captureFrame, stopCamera, onDetected]
+    [captureFrame]
   );
 
   // ─── Vòng quét WebAssembly siêu tốc (Tần số cao ~45 FPS + Dual Pass) ─────
@@ -505,8 +519,8 @@ export default function ScannerModal({
   // ─── Vòng đời modal ───────────────────────────────────────────────────────
   useEffect(() => {
     if (isOpen) {
-      setCapturedPhoto(null);
-      setDetectedCode(null);
+      setScannedBatch([]);
+      setManualCode('');
       setDetectedLatencyMs(null);
       setDetectedFormat(null);
       setCameraError(null);
@@ -530,38 +544,58 @@ export default function ScannerModal({
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!manualCode.trim()) return;
-    onDetected(manualCode.trim());
-    onClose();
+    const trimmed = manualCode.trim();
+    if (!trimmed) return;
+
+    playScannerBeep();
+    const photo = captureFrame();
+
+    setScannedBatch((prev) => {
+      const exists = prev.some((item) => item.code.toLowerCase() === trimmed.toLowerCase());
+      if (exists) {
+        setContinuousToast(`⚠️ Đã có trong danh sách: ${trimmed}`);
+        setTimeout(() => setContinuousToast(null), 1200);
+        return prev;
+      }
+      const newItem: ScannedBatchItem = {
+        code: trimmed,
+        photo: photo || undefined,
+        format: 'MANUAL',
+        timestamp: Date.now(),
+      };
+      const updated = [newItem, ...prev];
+      setContinuousToast(`✓ Đã thêm: ${trimmed} (${updated.length} mã)`);
+      setTimeout(() => setContinuousToast(null), 1200);
+      return updated;
+    });
+
+    setManualCode('');
   };
 
-  const handleConfirmDetected = () => {
-    if (detectedCode) {
-      onDetected(detectedCode, capturedPhoto || undefined);
-      onClose();
+  const handleConfirmBatch = () => {
+    if (scannedBatch.length === 0) return;
+    if (onBatchDetected) {
+      onBatchDetected(scannedBatch);
+    } else {
+      for (const item of scannedBatch) {
+        onDetected(item.code, item.photo);
+      }
     }
-  };
-
-  const handleRescan = () => {
-    setDetectedCode(null);
-    setCapturedPhoto(null);
-    setDetectedLatencyMs(null);
-    setDetectedFormat(null);
-    isHandlingDetectionRef.current = false;
-    startCamera();
+    stopCamera();
+    onClose();
   };
 
   if (!isOpen) return null;
 
   return (
     <div className="modal-overlay" style={{ zIndex: 150 }} onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 540 }}>
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{title}</h3>
             <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-              Động cơ: ZXing C++ WASM Turbo (Tần số ~40 FPS)
+              Động cơ: ZXing C++ WASM Turbo • Quét & chụp liên tục
             </span>
           </div>
           <button
@@ -579,34 +613,6 @@ export default function ScannerModal({
           </button>
         </div>
 
-        {/* Chế độ quét liên tục (tùy chọn) */}
-        {isContinuousSupported && !detectedCode && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              background: 'rgba(59,130,246,0.1)',
-              border: '1px solid rgba(59,130,246,0.3)',
-              padding: '6px 12px',
-              borderRadius: 'var(--radius-sm)',
-              marginTop: 2,
-            }}
-          >
-            <div style={{ fontSize: '0.78rem', color: '#93c5fd' }}>
-              ⚡ <strong>Quét liên tục:</strong> Tự động nhận tiếp mã mà không đóng popup
-            </div>
-            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', margin: 0 }}>
-              <input
-                type="checkbox"
-                checked={continuousMode}
-                onChange={(e) => setContinuousMode(e.target.checked)}
-                style={{ width: 16, height: 16, accentColor: 'var(--primary)' }}
-              />
-            </label>
-          </div>
-        )}
-
         {/* Cảnh báo in-app browser */}
         {inAppNotice && (
           <div
@@ -623,317 +629,396 @@ export default function ScannerModal({
           </div>
         )}
 
-        {/* Kết quả nhận diện (Chế độ thường) */}
-        {detectedCode ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
-            <div
-              className="toast-notice info"
-              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-            >
-              <div>
-                Đã nhận diện: <strong>{detectedCode}</strong>
-                {detectedFormat && (
-                  <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.7)', marginTop: 2 }}>
-                    Định dạng: {detectedFormat}
-                  </div>
-                )}
-              </div>
-              {detectedLatencyMs !== null && (
-                <span
-                  style={{
-                    fontSize: '0.72rem',
-                    background: 'rgba(0,0,0,0.25)',
-                    padding: '3px 8px',
-                    borderRadius: 4,
-                    fontWeight: 600,
-                  }}
-                >
-                  ⚡ {detectedLatencyMs}ms
-                </span>
-              )}
-            </div>
-            {capturedPhoto && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 6 }}>
+          {/* Vùng chứa camera Scanner */}
+          <div
+            style={{
+              position: 'relative',
+              width: '100%',
+              height: 270,
+              background: '#090d16',
+              borderRadius: 'var(--radius-sm)',
+              overflow: 'hidden',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {/* Thẻ video luồng camera mượt mà */}
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                display: 'block',
+              }}
+            />
+
+            {/* Viewfinder ngắm barcode & tia laser chuyển động */}
+            {cameraActive && !isLoadingCamera && !cameraError && (
               <div
                 style={{
-                  borderRadius: 'var(--radius-sm)',
-                  overflow: 'hidden',
-                  border: '2px solid var(--primary)',
-                  position: 'relative',
+                  position: 'absolute',
+                  inset: 0,
+                  pointerEvents: 'none',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 4,
                 }}
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={capturedPhoto}
-                  alt="Khung hình đối chiếu"
-                  style={{ width: '100%', height: 'auto', display: 'block' }}
-                />
+                {/* Khung chữ nhật ngang tối ưu cho mã vạch 1D */}
                 <div
                   style={{
-                    position: 'absolute',
-                    bottom: 6,
-                    right: 6,
-                    background: 'rgba(0,0,0,0.7)',
-                    color: '#fff',
-                    fontSize: '0.7rem',
-                    padding: '2px 6px',
-                    borderRadius: 4,
+                    position: 'relative',
+                    width: '84%',
+                    maxWidth: 320,
+                    height: 130,
+                    border: '2px solid rgba(59, 130, 246, 0.9)',
+                    borderRadius: 14,
+                    boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.42)',
+                    overflow: 'hidden',
                   }}
                 >
-                  Khung hình đối chiếu
+                  {/* Tia laser đỏ quét ngang */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: 0,
+                      right: 0,
+                      height: 2,
+                      background: '#ef4444',
+                      boxShadow: '0 0 10px #ef4444, 0 0 4px #fff',
+                      animation: 'scanLaser 1.8s ease-in-out infinite alternate',
+                    }}
+                  />
+                  {/* 4 góc trợ ngắm */}
+                  {[
+                    { top: 0, left: 0, borderTop: '3px solid #60a5fa', borderLeft: '3px solid #60a5fa' },
+                    { top: 0, right: 0, borderTop: '3px solid #60a5fa', borderRight: '3px solid #60a5fa' },
+                    { bottom: 0, left: 0, borderBottom: '3px solid #60a5fa', borderLeft: '3px solid #60a5fa' },
+                    { bottom: 0, right: 0, borderBottom: '3px solid #60a5fa', borderRight: '3px solid #60a5fa' },
+                  ].map((s, i) => (
+                    <div key={i} style={{ position: 'absolute', width: 16, height: 16, ...s }} />
+                  ))}
+                </div>
+
+                {/* Dòng hướng dẫn người dùng */}
+                <div
+                  style={{
+                    marginTop: 8,
+                    background: 'rgba(0, 0, 0, 0.78)',
+                    color: '#f8fafc',
+                    fontSize: '0.72rem',
+                    padding: '3px 10px',
+                    borderRadius: 16,
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                  }}
+                >
+                  🎯 Đưa mã vạch vào khung (tự động nhận & chụp ảnh)
                 </div>
               </div>
             )}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={handleRescan}>
-                Quét lại
-              </button>
-              <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleConfirmDetected}>
-                ✓ Xác nhận mã
-              </button>
-            </div>
+
+            {/* Toast thông báo chế độ quét liên tục */}
+            {continuousToast && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 14,
+                  background: continuousToast.startsWith('⚠️') ? 'var(--warning-bg)' : 'var(--success)',
+                  color: continuousToast.startsWith('⚠️') ? '#fcd34d' : '#fff',
+                  border: continuousToast.startsWith('⚠️') ? '1px solid #f59e0b' : 'none',
+                  padding: '7px 16px',
+                  borderRadius: 20,
+                  fontSize: '0.82rem',
+                  fontWeight: 700,
+                  boxShadow: '0 4px 14px rgba(0,0,0,0.6)',
+                  zIndex: 20,
+                  animation: 'slideDown 0.2s ease-out',
+                }}
+              >
+                {continuousToast}
+              </div>
+            )}
+
+            {/* Loading overlay */}
+            {isLoadingCamera && !cameraError && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  background: 'rgba(9, 13, 22, 0.88)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#fff',
+                  gap: 10,
+                  zIndex: 10,
+                }}
+              >
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    border: '3px solid rgba(255,255,255,0.2)',
+                    borderTopColor: 'var(--primary)',
+                    borderRadius: '50%',
+                    animation: 'spin 0.8s linear infinite',
+                  }}
+                />
+                <span style={{ fontSize: '0.85rem' }}>Đang khởi động camera...</span>
+                <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.6)' }}>
+                  Bấm &ldquo;Cho phép&rdquo; nếu trình duyệt hỏi quyền
+                </span>
+              </div>
+            )}
+
+            {/* Overlay hiển thị lỗi */}
+            {cameraError && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  padding: 16,
+                  textAlign: 'center',
+                  color: '#fca5a5',
+                  fontSize: '0.85rem',
+                  background: 'rgba(15,23,42,0.95)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 12,
+                  zIndex: 11,
+                }}
+              >
+                <div style={{ lineHeight: 1.5 }}>{cameraError}</div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.8rem' }}
+                    onClick={() => startCamera()}
+                  >
+                    🔄 Thử lại
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    style={{ fontSize: '0.8rem' }}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    📷 Chụp ảnh bằng máy
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 6 }}>
-            {/* Vùng chứa camera Scanner */}
-            <div
+
+          {/* Các nút điều khiển tiện ích */}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              className="btn btn-primary"
               style={{
-                position: 'relative',
-                width: '100%',
-                height: 290,
-                background: '#090d16',
-                borderRadius: 'var(--radius-sm)',
-                overflow: 'hidden',
+                flex: 2,
+                fontSize: '0.85rem',
+                padding: '8px 12px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
+                gap: 6,
+              }}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <span>📷</span>
+              <span>Chụp ảnh bằng máy</span>
+            </button>
+
+            {hasTorch && (
+              <button
+                type="button"
+                className={`btn ${isTorchOn ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '8px 12px', fontSize: '0.85rem' }}
+                onClick={handleToggleTorch}
+                title="Bật/tắt đèn flash"
+              >
+                {isTorchOn ? '🔦 Tắt đèn' : '⚡ Bật đèn'}
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ flex: 1, fontSize: '0.85rem', padding: '8px 10px' }}
+              onClick={handleCycleCamera}
+              title="Đổi camera trước / sau hoặc ống kính khác"
+            >
+              🔄 Đổi cam {availableDevices.length > 1 ? `(${currentDeviceIndex + 1}/${availableDevices.length})` : ''}
+            </button>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              style={{ display: 'none' }}
+              onChange={handleFileUpload}
+            />
+          </div>
+        </div>
+
+        {/* DANH SÁCH MÃ ĐÃ QUÉT TRONG PHIÊN (BẰNG CHỨNG + ẢNH) */}
+        {scannedBatch.length > 0 ? (
+          <div
+            style={{
+              background: 'rgba(59, 130, 246, 0.08)',
+              border: '1px solid rgba(59, 130, 246, 0.35)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '10px 12px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              marginTop: 10,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#93c5fd' }}>
+                📦 Đã quét: <strong>{scannedBatch.length}</strong> thiết bị
+              </span>
+              <button
+                type="button"
+                onClick={() => setScannedBatch([])}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  fontSize: '0.75rem',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                Xóa tất cả
+              </button>
+            </div>
+
+            {/* Danh sách cuộn ngang có ảnh thumbnail */}
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                overflowX: 'auto',
+                paddingBottom: 4,
+                scrollbarWidth: 'thin',
               }}
             >
-              {/* Thẻ video luồng camera mượt mà */}
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'cover',
-                  display: 'block',
-                }}
-              />
-
-              {/* Viewfinder ngắm barcode & tia laser chuyển động */}
-              {cameraActive && !isLoadingCamera && !cameraError && (
+              {scannedBatch.map((item, idx) => (
                 <div
+                  key={`${item.code}-${idx}`}
                   style={{
-                    position: 'absolute',
-                    inset: 0,
-                    pointerEvents: 'none',
                     display: 'flex',
-                    flexDirection: 'column',
                     alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 4,
+                    gap: 8,
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '6px 10px',
+                    flexShrink: 0,
                   }}
                 >
-                  {/* Khung chữ nhật ngang tối ưu cho mã vạch 1D */}
-                  <div
-                    style={{
-                      position: 'relative',
-                      width: '84%',
-                      maxWidth: 320,
-                      height: 140,
-                      border: '2px solid rgba(59, 130, 246, 0.9)',
-                      borderRadius: 14,
-                      boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.42)',
-                      overflow: 'hidden',
-                    }}
-                  >
-                    {/* Tia laser đỏ quét ngang */}
-                    <div
+                  {item.photo ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={item.photo}
+                      alt="Snap"
                       style={{
-                        position: 'absolute',
-                        left: 0,
-                        right: 0,
-                        height: 2,
-                        background: '#ef4444',
-                        boxShadow: '0 0 10px #ef4444, 0 0 4px #fff',
-                        animation: 'scanLaser 1.8s ease-in-out infinite alternate',
+                        width: 38,
+                        height: 38,
+                        objectFit: 'cover',
+                        borderRadius: 4,
+                        border: '1px solid var(--primary)',
                       }}
                     />
-                    {/* 4 góc trợ ngắm */}
-                    {[
-                      { top: 0, left: 0, borderTop: '3px solid #60a5fa', borderLeft: '3px solid #60a5fa' },
-                      { top: 0, right: 0, borderTop: '3px solid #60a5fa', borderRight: '3px solid #60a5fa' },
-                      { bottom: 0, left: 0, borderBottom: '3px solid #60a5fa', borderLeft: '3px solid #60a5fa' },
-                      { bottom: 0, right: 0, borderBottom: '3px solid #60a5fa', borderRight: '3px solid #60a5fa' },
-                    ].map((s, i) => (
-                      <div key={i} style={{ position: 'absolute', width: 16, height: 16, ...s }} />
-                    ))}
+                  ) : (
+                    <div
+                      style={{
+                        width: 38,
+                        height: 38,
+                        background: 'rgba(255,255,255,0.06)',
+                        borderRadius: 4,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '1rem',
+                      }}
+                    >
+                      🏷️
+                    </div>
+                  )}
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#fff' }}>
+                      {item.code}
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                      {item.format || 'BARCODE'}
+                    </div>
                   </div>
-
-                  {/* Dòng hướng dẫn người dùng */}
-                  <div
+                  <button
+                    type="button"
+                    onClick={() => setScannedBatch((prev) => prev.filter((_, i) => i !== idx))}
                     style={{
-                      marginTop: 10,
-                      background: 'rgba(0, 0, 0, 0.78)',
-                      color: '#f8fafc',
-                      fontSize: '0.74rem',
-                      padding: '4px 12px',
-                      borderRadius: 16,
-                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--danger)',
+                      fontSize: '1.2rem',
+                      cursor: 'pointer',
+                      padding: '0 2px',
+                      lineHeight: 1,
+                      marginLeft: 4,
                     }}
+                    title="Xóa mã này khỏi danh sách"
                   >
-                    🎯 Đưa mã vạch vào khung (khoảng cách 15-20cm)
-                  </div>
+                    &times;
+                  </button>
                 </div>
-              )}
-
-              {/* Toast thông báo chế độ quét liên tục */}
-              {continuousToast && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 16,
-                    background: 'var(--success)',
-                    color: '#fff',
-                    padding: '8px 16px',
-                    borderRadius: 20,
-                    fontSize: '0.85rem',
-                    fontWeight: 700,
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-                    zIndex: 20,
-                    animation: 'slideDown 0.2s ease-out',
-                  }}
-                >
-                  {continuousToast}
-                </div>
-              )}
-
-              {/* Loading overlay */}
-              {isLoadingCamera && !cameraError && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    background: 'rgba(9, 13, 22, 0.88)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#fff',
-                    gap: 10,
-                    zIndex: 10,
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 32,
-                      height: 32,
-                      border: '3px solid rgba(255,255,255,0.2)',
-                      borderTopColor: 'var(--primary)',
-                      borderRadius: '50%',
-                      animation: 'spin 0.8s linear infinite',
-                    }}
-                  />
-                  <span style={{ fontSize: '0.85rem' }}>Đang khởi động camera...</span>
-                  <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.6)' }}>
-                    Bấm &ldquo;Cho phép&rdquo; nếu trình duyệt hỏi quyền
-                  </span>
-                </div>
-              )}
-
-              {/* Overlay hiển thị lỗi */}
-              {cameraError && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    padding: 16,
-                    textAlign: 'center',
-                    color: '#fca5a5',
-                    fontSize: '0.85rem',
-                    background: 'rgba(15,23,42,0.95)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 12,
-                    zIndex: 11,
-                  }}
-                >
-                  <div style={{ lineHeight: 1.5 }}>{cameraError}</div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-                    <button
-                      className="btn btn-secondary"
-                      style={{ fontSize: '0.8rem' }}
-                      onClick={() => startCamera()}
-                    >
-                      🔄 Thử lại
-                    </button>
-                    <button
-                      className="btn btn-primary"
-                      style={{ fontSize: '0.8rem' }}
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      📷 Chụp ảnh bằng máy
-                    </button>
-                  </div>
-                </div>
-              )}
+              ))}
             </div>
 
-            {/* Các nút điều khiển tiện ích */}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{
-                  flex: 2,
-                  fontSize: '0.85rem',
-                  padding: '9px 12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 6,
-                }}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <span>📷</span>
-                <span>Chụp ảnh bằng máy</span>
-              </button>
-
-              {hasTorch && (
-                <button
-                  type="button"
-                  className={`btn ${isTorchOn ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ padding: '9px 12px', fontSize: '0.85rem' }}
-                  onClick={handleToggleTorch}
-                  title="Bật/tắt đèn flash"
-                >
-                  {isTorchOn ? '🔦 Tắt đèn' : '⚡ Bật đèn'}
-                </button>
-              )}
-
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ flex: 1, fontSize: '0.85rem', padding: '9px 10px' }}
-                onClick={handleCycleCamera}
-                title="Đổi camera trước / sau hoặc ống kính khác"
-              >
-                🔄 Đổi cam {availableDevices.length > 1 ? `(${currentDeviceIndex + 1}/${availableDevices.length})` : ''}
-              </button>
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                style={{ display: 'none' }}
-                onChange={handleFileUpload}
-              />
-            </div>
+            {/* Nút to xác nhận hoàn tất danh sách */}
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{
+                width: '100%',
+                padding: '11px',
+                fontSize: '0.92rem',
+                fontWeight: 700,
+                marginTop: 2,
+              }}
+              onClick={handleConfirmBatch}
+            >
+              ✓ Xác nhận danh sách ({scannedBatch.length} mã)
+            </button>
+          </div>
+        ) : (
+          <div
+            style={{
+              padding: '10px 12px',
+              background: 'rgba(255, 255, 255, 0.03)',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px dashed var(--border-color)',
+              fontSize: '0.78rem',
+              color: 'var(--text-muted)',
+              textAlign: 'center',
+              marginTop: 10,
+            }}
+          >
+            💡 Đưa camera vào mã vạch để quét liên tục. Mỗi mã sẽ tự động chụp ảnh & thêm vào danh sách để bạn xác nhận 1 lần.
           </div>
         )}
 
@@ -941,19 +1026,19 @@ export default function ScannerModal({
         {allowManual && (
           <form
             onSubmit={handleManualSubmit}
-            style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}
+            style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}
           >
-            <div className="form-label">Hoặc nhập SN / Mã quản lý thủ công:</div>
+            <div className="form-label" style={{ fontSize: '0.78rem' }}>Hoặc nhập SN / Mã quản lý thủ công:</div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input
                 type="text"
                 className="input"
-                placeholder="VD: SN-12345678"
+                placeholder="VD: PF-3A9804 hoặc CN-DELL..."
                 value={manualCode}
                 onChange={(e) => setManualCode(e.target.value)}
               />
-              <button type="submit" className="btn btn-primary" style={{ whiteSpace: 'nowrap' }}>
-                Xác nhận
+              <button type="submit" className="btn btn-secondary" style={{ whiteSpace: 'nowrap' }}>
+                + Thêm vào DS
               </button>
             </div>
           </form>
