@@ -375,3 +375,19 @@ body {
   color: #fca5a5;
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
+
+/* Html5Qrcode Scanner Styling */
+#qr-code-scanner-region {
+  width: 100% !important;
+  border: none !important;
+}
+#qr-code-scanner-region video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  border-radius: var(--radius-sm);
+}
+#qr-code-scanner-region img[alt="Info icon"] {
+  display: none !important;
+}
+
