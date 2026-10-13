@@ -1157,11 +1157,12 @@ class InventoryService {
       if (params.outbound_date !== undefined) {
         if (params.outbound_date) {
           // Có ngày xuất cụ thể
-          const hasOutItem = rawDev.outbound_items && rawDev.outbound_items.length > 0;
+          const hasOutItem = rawDev.outbound_items && Array.isArray(rawDev.outbound_items) && rawDev.outbound_items.length > 0;
           if (hasOutItem) {
             const topOut = rawDev.outbound_items[0];
-            if (topOut.outbound_receipt) {
-              const prevNotes = topOut.outbound_receipt.notes || '';
+            const receiptId = topOut.receipt_id || topOut.outbound_receipt?.id;
+            if (receiptId) {
+              const prevNotes = topOut.outbound_receipt?.notes || '';
               await supabase
                 .from('outbound_receipts')
                 .update({
@@ -1169,7 +1170,35 @@ class InventoryService {
                   notes: prevNotes ? `${prevNotes}\n${auditStamp}` : auditStamp,
                   updated_at: new Date().toISOString(),
                 })
-                .eq('id', topOut.outbound_receipt.id);
+                .eq('id', receiptId);
+            }
+          } else {
+            // Thiết bị chưa có phiếu xuất: Tự động tạo phiếu xuất và liên kết thiết bị
+            let recipientId = rawDev.owner_party_id || rawDev.holder_party_id;
+            if (!recipientId) {
+              const { data: firstParty } = await supabase.from('parties').select('id').limit(1).single();
+              recipientId = firstParty?.id;
+            }
+
+            const code = `PX-${params.outbound_date.replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+            const { data: newReceipt, error: recErr } = await supabase
+              .from('outbound_receipts')
+              .insert({
+                code,
+                recipient_party_id: recipientId,
+                outbound_type: 'SALE_INDIVIDUAL',
+                outbound_date: params.outbound_date,
+                status: 'CONFIRMED',
+                notes: auditStamp,
+              })
+              .select()
+              .single();
+
+            if (!recErr && newReceipt) {
+              await supabase.from('outbound_items').insert({
+                receipt_id: newReceipt.id,
+                device_id: params.device_id,
+              });
             }
           }
 
@@ -1199,21 +1228,22 @@ class InventoryService {
             }
           }
 
-          // Đảm bảo updated_at trên device để kích hoạt trigger outbox
+          // Cập nhật trạng thái device sang EXTERNAL_PARTY (Đã xuất kho)
           await supabase
             .from('devices')
             .update({
+              holder_type: 'EXTERNAL_PARTY',
+              owner_type: 'EXTERNAL',
               updated_at: new Date().toISOString(),
             })
             .eq('id', params.device_id);
         } else {
           // Người dùng xóa ngày xuất (Chưa xuất kho / chuyển về kho)
-          if (rawDev.outbound_items && rawDev.outbound_items.length > 0) {
-            await supabase
-              .from('outbound_items')
-              .delete()
-              .eq('device_id', params.device_id);
-          }
+          await supabase
+            .from('outbound_items')
+            .delete()
+            .eq('device_id', params.device_id);
+
           const activeAssign = rawDev.assignments?.find((a: any) => !a.checkin_date);
           if (activeAssign) {
             await supabase
@@ -1275,7 +1305,29 @@ class InventoryService {
     if (params.outbound_date !== undefined) {
       dev.outbound_date = params.outbound_date;
       if (params.outbound_date) {
-        if (dev.outbound_receipt) {
+        if (!dev.outbound_receipt) {
+          const recId = `rec-out-${Date.now()}`;
+          dev.outbound_receipt = {
+            id: recId,
+            code: `PX-${params.outbound_date.replace(/-/g, '')}-MOCK`,
+            recipient_party_id: dev.owner_party_id || 'mock-customer',
+            outbound_type: 'SALE_INDIVIDUAL',
+            outbound_date: params.outbound_date,
+            status: 'CONFIRMED',
+            notes: auditStamp,
+            created_at: new Date().toISOString(),
+          };
+          dev.outbound_items = [
+            {
+              id: `item-out-${Date.now()}`,
+              receipt_id: recId,
+              created_at: new Date().toISOString(),
+              outbound_receipt: dev.outbound_receipt,
+            },
+          ];
+          dev.holder_type = 'EXTERNAL_PARTY';
+          dev.owner_type = 'EXTERNAL';
+        } else {
           dev.outbound_receipt.outbound_date = params.outbound_date;
           dev.outbound_receipt.notes = dev.outbound_receipt.notes ? `${dev.outbound_receipt.notes}\n${auditStamp}` : auditStamp;
         }

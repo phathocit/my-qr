@@ -683,14 +683,19 @@ export default function HomePage() {
 
       await refreshData();
 
-      // Cập nhật selectedDevice nếu đang xem
-      if (selectedDevice && selectedDevice.id === editDatesDevice.id) {
+      // Lấy lại dữ liệu thiết bị mới nhất từ service
+      const freshDev = await inventoryService.findDeviceByCode(editDatesDevice.management_code);
+      if (freshDev) {
+        setSelectedDevice(freshDev);
+      } else if (selectedDevice && selectedDevice.id === editDatesDevice.id) {
         setSelectedDevice((prev) => {
           if (!prev) return null;
           return {
             ...prev,
             inbound_date: editInboundDate || prev.inbound_date,
             outbound_date: targetOutDate,
+            holder_type: targetOutDate ? 'EXTERNAL_PARTY' : 'INTERNAL_STORAGE',
+            owner_type: targetOutDate ? 'EXTERNAL' : 'INTERNAL',
             updated_at: new Date().toISOString(),
           };
         });
