@@ -109,10 +109,22 @@ export default function ScannerModal({
   const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
   const [inAppNotice, setInAppNotice] = useState(false);
   const [continuousToast, setContinuousToast] = useState<string | null>(null);
+  const [scanIdleSeconds, setScanIdleSeconds] = useState<number>(0);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanLoopActiveRef = useRef(false);
+
+  useEffect(() => {
+    if (!cameraActive) {
+      setScanIdleSeconds(0);
+      return;
+    }
+    const timer = setInterval(() => {
+      setScanIdleSeconds((s) => s + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cameraActive]);
   const isDecodingRef = useRef(false);
   const isHandlingDetectionRef = useRef(false);
   const scanStartTimeRef = useRef(0);
@@ -169,6 +181,7 @@ export default function ScannerModal({
     (code: string, format?: string, customPhoto?: string) => {
       if (isHandlingDetectionRef.current) return;
       isHandlingDetectionRef.current = true;
+      setScanIdleSeconds(0);
 
       const trimmed = code.trim();
       if (!trimmed) {
@@ -708,19 +721,32 @@ export default function ScannerModal({
                   ))}
                 </div>
 
-                {/* Dòng hướng dẫn người dùng */}
+                {/* Dòng hướng dẫn người dùng động thông minh */}
                 <div
                   style={{
                     marginTop: 8,
-                    background: 'rgba(0, 0, 0, 0.78)',
-                    color: '#f8fafc',
+                    background:
+                      scanIdleSeconds >= 6
+                        ? 'rgba(180, 83, 9, 0.92)'
+                        : scanIdleSeconds >= 3
+                        ? 'rgba(30, 58, 138, 0.92)'
+                        : 'rgba(0, 0, 0, 0.78)',
+                    color: scanIdleSeconds >= 6 ? '#fef08a' : '#f8fafc',
                     fontSize: '0.72rem',
-                    padding: '3px 10px',
+                    padding: '4px 12px',
                     borderRadius: 16,
-                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    border:
+                      scanIdleSeconds >= 6
+                        ? '1px solid rgba(245, 158, 11, 0.6)'
+                        : '1px solid rgba(255, 255, 255, 0.15)',
+                    transition: 'all 0.3s ease',
+                    textAlign: 'center',
+                    maxWidth: '92%',
                   }}
                 >
-                  🎯 Đưa mã vạch vào khung (tự động nhận & chụp ảnh)
+                  {scanIdleSeconds < 3 && '🎯 Đưa mã vạch vào khung (khoảng cách 15-20cm)'}
+                  {scanIdleSeconds >= 3 && scanIdleSeconds < 6 && '💡 Chưa đọc được? Hãy đưa gần hơn 15-20cm & giữ chắc tay'}
+                  {scanIdleSeconds >= 6 && '⚡ Tem mờ/lóa? Thử bật đèn flash hoặc bấm [📷 Chụp ảnh] để lấy nét'}
                 </div>
               </div>
             )}
