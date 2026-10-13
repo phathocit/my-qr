@@ -67,6 +67,8 @@ export interface Device {
   customer_warranty?: WarrantyPolicy | null;
   active_assignment?: Assignment | null;
   active_warranty_case?: WarrantyCase | null;
+  evidence_photos?: EvidencePhoto[] | null;
+  photo_url?: string | null;
 }
 
 export interface Assignment {

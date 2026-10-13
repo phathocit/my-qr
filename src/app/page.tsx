@@ -49,6 +49,7 @@ export default function HomePage() {
     technical_condition: 'USABLE' | 'NEEDS_INSPECTION';
     photo?: string;
   }>>([]);
+  const [previewPhoto, setPreviewPhoto] = useState<{ url: string; title?: string } | null>(null);
 
   // Outbound Form State
   const [outboundType, setOutboundType] = useState<'SALE_INDIVIDUAL' | 'SALE_ORG' | 'GIVE_PERMANENT' | 'LOAN' | 'RETURN_SUPPLIER'>('SALE_INDIVIDUAL');
@@ -282,6 +283,7 @@ export default function HomePage() {
           management_code: item.management_code,
           serial_number: item.serial_number,
           technical_condition: item.technical_condition,
+          photo: item.photo,
         })),
       });
       showNotice(res.message, 'success');
@@ -791,6 +793,54 @@ export default function HomePage() {
                   </div>
                 </div>
 
+                {/* Ảnh chứng từ chụp lúc quét nhập kho */}
+                {(selectedDevice.photo_url || (selectedDevice.evidence_photos && selectedDevice.evidence_photos.length > 0)) && (
+                  <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>📷</span>
+                      <span>Ảnh chụp chứng từ lúc quét nhập kho:</span>
+                    </div>
+                    <div
+                      style={{
+                        position: 'relative',
+                        borderRadius: 'var(--radius-sm)',
+                        overflow: 'hidden',
+                        cursor: 'pointer',
+                        border: '1px solid var(--border-color)',
+                        maxHeight: 180,
+                        background: '#000',
+                      }}
+                      onClick={() =>
+                        setPreviewPhoto({
+                          url: selectedDevice.photo_url || (selectedDevice.evidence_photos?.[0] as any)?.storage_key || '',
+                          title: `Ảnh chứng từ: ${selectedDevice.management_code} (${selectedDevice.serial_number || 'Không có SN'})`,
+                        })
+                      }
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={selectedDevice.photo_url || (selectedDevice.evidence_photos?.[0] as any)?.storage_key || ''}
+                        alt="Ảnh chứng từ nhập kho"
+                        style={{ width: '100%', height: 180, objectFit: 'cover', display: 'block' }}
+                      />
+                      <div
+                        style={{
+                          position: 'absolute',
+                          bottom: 6,
+                          right: 6,
+                          background: 'rgba(0,0,0,0.75)',
+                          color: '#fff',
+                          fontSize: '0.72rem',
+                          padding: '3px 8px',
+                          borderRadius: 4,
+                        }}
+                      >
+                        🔍 Bấm để phóng to
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Action if loaned */}
                 {selectedDevice.active_assignment && (
                   <button
@@ -928,17 +978,79 @@ export default function HomePage() {
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
+                        gap: 10,
                       }}
                     >
-                      <div>
-                        <div style={{ fontWeight: 600 }}>{item.product_name}</div>
-                        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                          SN: {item.serial_number || '(Mã tự sinh: ' + item.management_code + ')'}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
+                        {item.photo ? (
+                          <div
+                            onClick={() =>
+                              setPreviewPhoto({
+                                url: item.photo!,
+                                title: `Ảnh quét: ${item.product_name} (${item.serial_number || item.management_code})`,
+                              })
+                            }
+                            style={{
+                              width: 44,
+                              height: 44,
+                              borderRadius: 6,
+                              overflow: 'hidden',
+                              border: '2px solid var(--primary)',
+                              cursor: 'pointer',
+                              flexShrink: 0,
+                              position: 'relative',
+                            }}
+                            title="Bấm để xem ảnh đối chiếu"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={item.photo}
+                              alt="Thumbnail"
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            />
+                          </div>
+                        ) : (
+                          <div
+                            style={{
+                              width: 44,
+                              height: 44,
+                              borderRadius: 6,
+                              background: 'rgba(255,255,255,0.06)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '1.2rem',
+                              flexShrink: 0,
+                            }}
+                          >
+                            📦
+                          </div>
+                        )}
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {item.product_name}
+                          </div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                            SN: {item.serial_number || '(Mã tự sinh: ' + item.management_code + ')'}
+                          </div>
+                          {item.photo && (
+                            <span style={{ fontSize: '0.68rem', color: 'var(--success)', fontWeight: 600 }}>
+                              ✓ Đã chụp ảnh đối chiếu
+                            </span>
+                          )}
                         </div>
                       </div>
                       <button
-                        style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: '1.1rem' }}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--danger)',
+                          cursor: 'pointer',
+                          fontSize: '1.2rem',
+                          padding: 4,
+                        }}
                         onClick={() => setInboundItems((prev) => prev.filter((_, i) => i !== idx))}
+                        title="Xóa thiết bị này"
                       >
                         ✕
                       </button>
@@ -1770,6 +1882,60 @@ export default function HomePage() {
           <span>Tồn kho</span>
         </button>
       </nav>
+
+      {/* Photo Preview Modal */}
+      {previewPhoto && (
+        <div className="modal-overlay" onClick={() => setPreviewPhoto(null)}>
+          <div
+            className="modal-content"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: 640, padding: 18 }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>
+                {previewPhoto.title || 'Ảnh chứng từ chụp lúc quét'}
+              </h3>
+              <button
+                onClick={() => setPreviewPhoto(null)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  lineHeight: 1,
+                }}
+              >
+                &times;
+              </button>
+            </div>
+            <div
+              style={{
+                borderRadius: 'var(--radius-sm)',
+                overflow: 'hidden',
+                border: '1px solid var(--border-color)',
+                background: '#090d16',
+                maxHeight: '70vh',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={previewPhoto.url}
+                alt="Chi tiết ảnh chứng từ"
+                style={{ width: '100%', height: 'auto', maxHeight: '70vh', objectFit: 'contain', display: 'block' }}
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+              <button className="btn btn-secondary" onClick={() => setPreviewPhoto(null)}>
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

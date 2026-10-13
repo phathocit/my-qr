@@ -116,10 +116,22 @@ class InventoryService {
           *,
           product:products(*),
           owner_party:parties!devices_owner_party_id_fkey(*),
-          holder_party:parties!devices_holder_party_id_fkey(*)
+          holder_party:parties!devices_holder_party_id_fkey(*),
+          evidence_photos:evidence_photos(*)
         `)
         .order('created_at', { ascending: false });
-      if (!error && data) return data as Device[];
+      if (!error && data) {
+        return (data as any[]).map((dev) => {
+          if (dev.evidence_photos && dev.evidence_photos.length > 0) {
+            const firstPhoto = dev.evidence_photos[0];
+            const { data: pubUrl } = supabase.storage
+              .from('evidence-photos')
+              .getPublicUrl(firstPhoto.storage_key);
+            dev.photo_url = pubUrl?.publicUrl || null;
+          }
+          return dev as Device;
+        });
+      }
     }
     return this.devices;
   }
@@ -134,11 +146,22 @@ class InventoryService {
           *,
           product:products(*),
           owner_party:parties!devices_owner_party_id_fkey(*),
-          holder_party:parties!devices_holder_party_id_fkey(*)
+          holder_party:parties!devices_holder_party_id_fkey(*),
+          evidence_photos:evidence_photos(*)
         `)
         .or(`management_code.eq.${trimmed},serial_number.eq.${trimmed}`)
         .single();
-      if (!error && data) return data as Device;
+      if (!error && data) {
+        const dev = data as any;
+        if (dev.evidence_photos && dev.evidence_photos.length > 0) {
+          const firstPhoto = dev.evidence_photos[0];
+          const { data: pubUrl } = supabase.storage
+            .from('evidence-photos')
+            .getPublicUrl(firstPhoto.storage_key);
+          dev.photo_url = pubUrl?.publicUrl || null;
+        }
+        return dev as Device;
+      }
     }
 
     return (
@@ -223,6 +246,19 @@ class InventoryService {
     return { eligible: true };
   }
 
+  // Helper convert base64 DataURL to Blob
+  private dataURLtoBlob(dataurl: string): Blob {
+    const arr = dataurl.split(',');
+    const mime = arr[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new Blob([u8arr], { type: mime });
+  }
+
   // --- ACTIONS ---
   async confirmInboundReceipt(data: {
     supplier_id: string;
@@ -231,6 +267,7 @@ class InventoryService {
       serial_number?: string;
       management_code: string;
       technical_condition: 'USABLE' | 'NEEDS_INSPECTION';
+      photo?: string;
       supplier_warranty?: {
         has_warranty: boolean;
         start_date?: string;
@@ -250,12 +287,74 @@ class InventoryService {
         .single();
       if (recErr) throw recErr;
 
+      // Chuẩn bị payload thiết bị gửi sang RPC (bỏ trường photo vì RPC không nhận trường này)
+      const rpcDevices = data.items.map((item) => ({
+        product_id: item.product_id,
+        management_code: item.management_code,
+        serial_number: item.serial_number,
+        technical_condition: item.technical_condition,
+        supplier_warranty: item.supplier_warranty,
+      }));
+
       const { error: rpcErr } = await supabase.rpc('rpc_confirm_inbound_receipt', {
         p_receipt_id: rec.id,
-        p_devices: data.items,
+        p_devices: rpcDevices,
       });
       if (rpcErr) throw rpcErr;
-      return { success: true, message: `Đã nhập kho thành công phiếu ${receiptCode}` };
+
+      // Xử lý upload ảnh chứng từ cho các thiết bị có snapshot quét mã
+      const itemsWithPhotos = data.items.filter((i) => !!i.photo);
+      if (itemsWithPhotos.length > 0) {
+        try {
+          const { data: createdDevices } = await supabase
+            .from('devices')
+            .select('id, management_code, serial_number')
+            .eq('inbound_receipt_id', rec.id);
+
+          for (const item of itemsWithPhotos) {
+            try {
+              const matchingDev = createdDevices?.find(
+                (d) =>
+                  (item.serial_number && d.serial_number === item.serial_number) ||
+                  d.management_code === item.management_code
+              );
+              const devId = matchingDev?.id || null;
+              const blob = this.dataURLtoBlob(item.photo!);
+              const fileName = `${matchingDev?.management_code || item.management_code || 'dev'}_${Date.now()}.jpg`;
+              const storagePath = `inbound/${rec.id}/${fileName}`;
+
+              const { error: uploadError } = await supabase.storage
+                .from('evidence-photos')
+                .upload(storagePath, blob, {
+                  contentType: 'image/jpeg',
+                  upsert: true,
+                });
+
+              if (!uploadError) {
+                await supabase.from('evidence_photos').insert({
+                  entity_type: 'INBOUND_RECEIPT',
+                  entity_id: rec.id,
+                  device_id: devId,
+                  storage_key: storagePath,
+                  watermark_meta: {
+                    serial_number: item.serial_number,
+                    management_code: item.management_code,
+                    scanned_at: new Date().toISOString(),
+                  },
+                });
+              } else {
+                console.warn('Upload ảnh evidence-photos thất bại:', uploadError);
+              }
+            } catch (pErr) {
+              console.warn('Lỗi xử lý từng ảnh chứng từ:', pErr);
+            }
+          }
+        } catch (photoBatchErr) {
+          console.warn('Lỗi tải ảnh chứng từ nhập kho:', photoBatchErr);
+        }
+      }
+
+      return { success: true, message: `Đã nhập kho thành công phiếu ${receiptCode} (kèm ảnh chứng từ)` };
     }
 
     // Mock Mode Execution
@@ -270,8 +369,9 @@ class InventoryService {
       }
 
       const prod = this.products.find((p) => p.id === item.product_id);
+      const newDevId = `d-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
       const newDev: Device = {
-        id: `d-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        id: newDevId,
         product_id: item.product_id,
         product: prod,
         management_code: item.management_code,
@@ -282,6 +382,19 @@ class InventoryService {
         lifecycle: 'ACTIVE',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        photo_url: item.photo || null,
+        evidence_photos: item.photo
+          ? [
+              {
+                id: `photo-${Date.now()}`,
+                entity_type: 'INBOUND_RECEIPT',
+                entity_id: 'mock-rec',
+                device_id: newDevId,
+                storage_key: item.photo,
+                created_at: new Date().toISOString(),
+              },
+            ]
+          : [],
       };
       this.devices.unshift(newDev);
     }
