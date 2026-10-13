@@ -24,7 +24,7 @@ export async function GET(req: Request) {
       ? `${spreadsheetId.slice(0, 6)}...${spreadsheetId.slice(-4)}`
       : null;
 
-    let outboxStats = {
+    const outboxStats = {
       pending: 0,
       processing: 0,
       success: 0,
