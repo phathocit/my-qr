@@ -597,14 +597,14 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════════════ */
-/* THEME 4: APPLE LIQUID GLASS (iOS 18 / VisionOS Acrylic Glass)       */
+/* THEME 4: APPLE LIQUID GLASS (1:1 Replica VisionOS & iOS 18 Acrylic) */
 /* ═══════════════════════════════════════════════════════════════════ */
 [data-theme="apple"] {
   --bg-primary: #000000;
-  --bg-card: rgba(28, 28, 30, 0.65);
-  --bg-card-hover: rgba(44, 44, 46, 0.75);
-  --bg-input: rgba(255, 255, 255, 0.06);
-  --border-color: rgba(255, 255, 255, 0.13);
+  --bg-card: rgba(255, 255, 255, 0.045);
+  --bg-card-hover: rgba(255, 255, 255, 0.08);
+  --bg-input: rgba(255, 255, 255, 0.05);
+  --border-color: rgba(255, 255, 255, 0.14);
   --border-focus: #0a84ff;
 
   --text-primary: #ffffff;
@@ -617,103 +617,206 @@ body {
 
   --radius-sm: 12px;
   --radius-md: 18px;
-  --radius-lg: 22px;
+  --radius-lg: 24px;
   --radius-full: 9999px;
   --font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
 }
 
 [data-theme="apple"] body {
   background-color: #000000;
-  background-image: radial-gradient(circle at 50% -10%, rgba(10, 132, 255, 0.15), transparent 60%),
-                    radial-gradient(circle at 100% 70%, rgba(175, 82, 222, 0.08), transparent 50%),
-                    radial-gradient(circle at 0% 40%, rgba(48, 209, 88, 0.06), transparent 45%);
+  background-image: radial-gradient(circle at 15% 10%, rgba(10, 132, 255, 0.14), transparent 50%),
+                    radial-gradient(circle at 85% 85%, rgba(191, 90, 242, 0.1), transparent 50%),
+                    radial-gradient(circle at 50% 50%, rgba(48, 209, 88, 0.05), transparent 60%);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 [data-theme="apple"] .app-container {
   background: transparent;
+  padding-bottom: calc(var(--nav-height) + 32px);
 }
 
+/* 1:1 Apple Specular Rim Lighting & Frosted Acrylic Surface */
 [data-theme="apple"] .card {
-  background: rgba(28, 28, 30, 0.65);
-  backdrop-filter: blur(32px) saturate(190%);
-  -webkit-backdrop-filter: blur(32px) saturate(190%);
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: 20px;
-  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.22),
-              0 12px 36px rgba(0, 0, 0, 0.52);
-  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
+  background: rgba(255, 255, 255, 0.045);
+  backdrop-filter: blur(40px) saturate(210%);
+  -webkit-backdrop-filter: blur(40px) saturate(210%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 24px;
+  box-shadow: inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.28),
+              inset 0 -1px 1px 0 rgba(0, 0, 0, 0.35),
+              0 20px 48px rgba(0, 0, 0, 0.55);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+[data-theme="apple"] .card:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.35),
+              0 24px 56px rgba(0, 0, 0, 0.65);
+}
+
+/* 1:1 Cupertino Dynamic Glass Header Bar */
 [data-theme="apple"] .app-header {
-  background: rgba(18, 18, 20, 0.72);
-  backdrop-filter: blur(30px) saturate(190%);
-  -webkit-backdrop-filter: blur(30px) saturate(190%);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.06);
+  background: rgba(18, 18, 22, 0.65);
+  backdrop-filter: blur(35px) saturate(210%);
+  -webkit-backdrop-filter: blur(35px) saturate(210%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
 }
 
+/* 1:1 Apple VisionOS Floating Pill Dock (Không dính sát viền đáy) */
 [data-theme="apple"] .bottom-nav {
-  background: rgba(22, 22, 26, 0.78);
-  backdrop-filter: blur(35px) saturate(200%);
-  -webkit-backdrop-filter: blur(35px) saturate(200%);
-  border-top: 1px solid rgba(255, 255, 255, 0.14);
-  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.18),
-              0 -6px 24px rgba(0, 0, 0, 0.45);
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 24px);
+  max-width: 480px;
+  height: 64px;
+  background: rgba(22, 22, 26, 0.72);
+  backdrop-filter: blur(40px) saturate(210%);
+  -webkit-backdrop-filter: blur(40px) saturate(210%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 36px;
+  box-shadow: inset 0 1.5px 1px 0 rgba(255, 255, 255, 0.28),
+              0 16px 40px rgba(0, 0, 0, 0.65);
+  padding: 4px 8px;
 }
 
+@media (min-width: 768px) {
+  [data-theme="apple"] .bottom-nav {
+    max-width: 620px;
+  }
+}
+
+[data-theme="apple"] .nav-item {
+  border-radius: 24px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-theme="apple"] .nav-item.active {
+  color: #0a84ff;
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.15);
+}
+
+/* 1:1 Apple VisionOS Buttons (Spring curve & Specular Highlight) */
 [data-theme="apple"] .btn-primary {
-  background: #0a84ff;
-  color: #ffffff;
-  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(10, 132, 255, 0.95) 0%, rgba(0, 113, 227, 0.95) 100%);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: inset 0 1.5px 1px 0 rgba(255, 255, 255, 0.45),
+              0 8px 24px rgba(10, 132, 255, 0.42);
+  border-radius: 18px;
   font-weight: 600;
-  letter-spacing: -0.01em;
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.35),
-              0 6px 20px rgba(10, 132, 255, 0.38);
+  letter-spacing: -0.015em;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 [data-theme="apple"] .btn-primary:active {
-  background: #0071e3;
-  transform: scale(0.97);
+  transform: scale(0.96);
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.3),
+              0 4px 12px rgba(10, 132, 255, 0.3);
 }
 
 [data-theme="apple"] .btn-secondary {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.07);
   border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-radius: 14px;
-  color: #ffffff;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.18), 0 4px 12px rgba(0, 0, 0, 0.2);
+  border-radius: 18px;
+  color: #f5f5f7;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+[data-theme="apple"] .btn-secondary:active {
+  transform: scale(0.96);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* 1:1 Cupertino Inset Capsule Inputs */
 [data-theme="apple"] .input,
 [data-theme="apple"] .select,
 [data-theme="apple"] .textarea {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-radius: 14px;
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-radius: 16px;
   color: #ffffff;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 [data-theme="apple"] .input:focus,
 [data-theme="apple"] .select:focus,
 [data-theme="apple"] .textarea:focus {
   border-color: #0a84ff;
-  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2), 0 0 0 4px rgba(10, 132, 255, 0.28);
 }
 
+/* 1:1 Apple VisionOS Floating Window Modal */
+[data-theme="apple"] .modal-content {
+  background: rgba(24, 24, 28, 0.82);
+  backdrop-filter: blur(50px) saturate(220%);
+  -webkit-backdrop-filter: blur(50px) saturate(220%);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 28px;
+  box-shadow: inset 0 1.5px 1px rgba(255, 255, 255, 0.35),
+              0 32px 80px rgba(0, 0, 0, 0.85);
+}
+
+/* 1:1 Apple Vibrancy Tags & Badges */
 [data-theme="apple"] .badge {
   border-radius: 20px;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   font-weight: 600;
   letter-spacing: -0.01em;
-  padding: 3px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 4px 11px;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.2);
 }
+
+[data-theme="apple"] .badge-usable {
+  background: rgba(48, 209, 88, 0.18);
+  color: #30d158;
+  border: 1px solid rgba(48, 209, 88, 0.35);
+}
+
+[data-theme="apple"] .badge-inspection {
+  background: rgba(255, 159, 10, 0.18);
+  color: #ff9f0a;
+  border: 1px solid rgba(255, 159, 10, 0.35);
+}
+
+[data-theme="apple"] .badge-faulty {
+  background: rgba(255, 69, 58, 0.18);
+  color: #ff453a;
+  border: 1px solid rgba(255, 69, 58, 0.35);
+}
+
+[data-theme="apple"] .badge-internal {
+  background: rgba(10, 132, 255, 0.18);
+  color: #0a84ff;
+  border: 1px solid rgba(10, 132, 255, 0.35);
+}
+
+[data-theme="apple"] .badge-external {
+  background: rgba(191, 90, 242, 0.18);
+  color: #bf5af2;
+  border: 1px solid rgba(191, 90, 242, 0.35);
+}
+
+[data-theme="apple"] .toast-notice {
+  border-radius: 20px;
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.25), 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
 
 
 
