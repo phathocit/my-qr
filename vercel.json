@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/sync/sheets?action=sync_pending",
+      "schedule": "*/10 * * * *"
+    }
+  ]
+}

@@ -48,7 +48,8 @@ export default function HomePage() {
   // Inventory Group & Accordion State
   const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({});
   const [inventorySearch, setInventorySearch] = useState('');
-  const [inventoryFilter, setInventoryFilter] = useState<'ALL' | 'STORAGE' | 'EXTERNAL' | 'WARRANTY' | 'NEEDS_INSPECTION'>('ALL');
+  type InventoryFilterType = 'ALL' | 'STORAGE' | 'EXPORTED' | 'THIS_MONTH' | 'EXTERNAL' | 'WARRANTY' | 'NEEDS_INSPECTION';
+  const [inventoryFilter, setInventoryFilter] = useState<InventoryFilterType>('ALL');
 
   // Scanner Modal State
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -649,6 +650,8 @@ export default function HomePage() {
       setInboundItems([]);
       await refreshData();
       setActiveTab('inventory');
+      // Tự động kích hoạt đồng bộ Google Sheets chạy ngầm
+      fetch('/api/sync/sheets?action=sync_pending', { method: 'POST' }).catch(() => {});
     } catch (err: any) {
       showNotice(err.message || 'Lỗi khi nhập kho', 'error');
     } finally {
@@ -702,6 +705,8 @@ export default function HomePage() {
       setOutboundSelectedDevIds([]);
       await refreshData();
       setActiveTab('inventory');
+      // Tự động kích hoạt đồng bộ Google Sheets chạy ngầm
+      fetch('/api/sync/sheets?action=sync_pending', { method: 'POST' }).catch(() => {});
     } catch (err: any) {
       showNotice(err.message || 'Lỗi khi xuất kho', 'error');
     } finally {
@@ -725,6 +730,8 @@ export default function HomePage() {
       if (selectedDevice && selectedDevice.id === returnDevice.id) {
         setSelectedDevice(null);
       }
+      // Tự động kích hoạt đồng bộ Google Sheets chạy ngầm
+      fetch('/api/sync/sheets?action=sync_pending', { method: 'POST' }).catch(() => {});
     } catch (err: any) {
       showNotice(err.message || 'Lỗi khi thu hồi', 'error');
     } finally {
@@ -955,8 +962,16 @@ export default function HomePage() {
     }>();
 
     for (const dev of devices) {
-      // Bộ lọc danh mục tồn kho
-      if (inventoryFilter === 'STORAGE' && dev.holder_type !== 'INTERNAL_STORAGE') continue;
+      // Bộ lọc danh mục tồn kho & tình trạng xuất
+      if (inventoryFilter === 'STORAGE' && (dev.outbound_date || dev.holder_type !== 'INTERNAL_STORAGE')) continue;
+      if (inventoryFilter === 'EXPORTED' && !dev.outbound_date && dev.holder_type === 'INTERNAL_STORAGE') continue;
+      if (inventoryFilter === 'THIS_MONTH') {
+        const inDate = dev.inbound_date || dev.inbound_receipt?.received_date || dev.created_at;
+        if (!inDate) continue;
+        const d = new Date(inDate);
+        const now = new Date();
+        if (d.getFullYear() !== now.getFullYear() || d.getMonth() !== now.getMonth()) continue;
+      }
       if (inventoryFilter === 'EXTERNAL' && dev.holder_type !== 'EXTERNAL_PARTY') continue;
       if (inventoryFilter === 'WARRANTY' && dev.holder_type !== 'SUPPLIER_WARRANTY' && !dev.active_warranty_case) continue;
       if (inventoryFilter === 'NEEDS_INSPECTION' && dev.technical_condition === 'USABLE') continue;
@@ -1014,6 +1029,104 @@ export default function HomePage() {
       next[g.productId] = expand;
     });
     setExpandedModels(next);
+  };
+
+  // Xuất báo cáo tồn kho ra file Excel/CSV (UTF-8 có BOM tương thích Excel tiếng Việt)
+  const exportInventoryToCsv = () => {
+    try {
+      const filteredDevices = groupedInventoryModels.flatMap((g) => g.items);
+      if (filteredDevices.length === 0) {
+        showNotice('Không có thiết bị nào trong bộ lọc để xuất báo cáo!', 'error');
+        return;
+      }
+
+      const headers = [
+        'Mã quản lý',
+        'Tên Model',
+        'Hãng sản xuất',
+        'Phân loại',
+        'Serial Number (SN)',
+        'Ngày nhập kho',
+        'Ngày xuất kho',
+        'Trạng thái xuất kho',
+        'Vị trí / Bên giữ',
+        'Chủ sở hữu',
+        'Tình trạng kỹ thuật',
+        'Vòng đời',
+        'Bảo hành NCC',
+        'Bảo hành Khách',
+        'Mã phiếu nhập',
+        'Mã phiếu xuất',
+      ];
+
+      const rows = filteredDevices.map((dev) => {
+        const inDate = dev.inbound_date || dev.inbound_receipt?.received_date || dev.created_at;
+        const outStatus = dev.outbound_date
+          ? 'Đã xuất kho'
+          : dev.holder_type === 'EXTERNAL_PARTY'
+          ? 'Đang mượn / Bàn giao'
+          : 'Chưa xuất (Trong kho)';
+        const holder =
+          dev.holder_type === 'INTERNAL_STORAGE'
+            ? 'Kho nội bộ'
+            : dev.holder_type === 'SUPPLIER_WARRANTY'
+            ? 'TTBH Nhà cung cấp'
+            : (dev.holder_party?.name || 'Bên ngoài');
+        const owner = dev.owner_type === 'INTERNAL' ? 'Nội bộ' : (dev.owner_party?.name || 'Khách');
+        const cond =
+          dev.technical_condition === 'USABLE'
+            ? 'Sử dụng tốt'
+            : dev.technical_condition === 'NEEDS_INSPECTION'
+            ? 'Cần kiểm tra'
+            : 'Hỏng / Lỗi';
+
+        return [
+          dev.management_code,
+          dev.product?.name || '',
+          dev.product?.brand || '',
+          dev.product?.category || '',
+          dev.serial_number || '',
+          formatDateDisplay(inDate),
+          dev.outbound_date ? formatDateDisplay(dev.outbound_date) : 'Chưa xuất',
+          outStatus,
+          holder,
+          owner,
+          cond,
+          dev.lifecycle,
+          dev.supplier_warranty?.has_warranty ? `Đến ${dev.supplier_warranty.end_date || 'Không hạn'}` : 'Không',
+          dev.customer_warranty?.has_warranty ? `Đến ${dev.customer_warranty.end_date || 'Không hạn'}` : 'Không',
+          dev.inbound_receipt?.code || '',
+          dev.outbound_receipt?.code || '',
+        ];
+      });
+
+      const escapeCsv = (val: string) => {
+        const str = String(val ?? '');
+        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      };
+
+      const csvContent =
+        '\uFEFF' +
+        [headers.map(escapeCsv).join(','), ...rows.map((row) => row.map(escapeCsv).join(','))].join('\r\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const today = new Date().toISOString().slice(0, 10);
+      link.href = url;
+      link.setAttribute('download', `Bao-cao-ton-kho-${today}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      showNotice(`Đã xuất báo cáo ${filteredDevices.length} thiết bị ra file CSV thành công!`, 'success');
+    } catch (err: any) {
+      showNotice(err?.message || 'Lỗi khi xuất file báo cáo', 'error');
+    }
   };
 
   if (checkingAuth) {
@@ -2437,6 +2550,15 @@ export default function HomePage() {
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   <button
+                    className="btn btn-primary"
+                    style={{ padding: '6px 12px', minHeight: 32, fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                    onClick={exportInventoryToCsv}
+                    title="Tải toàn bộ danh sách tồn kho ra file Excel/CSV về máy tính"
+                  >
+                    <span>📥</span>
+                    <span>Xuất Excel/CSV</span>
+                  </button>
+                  <button
                     className="btn btn-secondary"
                     style={{ padding: '6px 10px', minHeight: 32, fontSize: '0.78rem' }}
                     onClick={() => {
@@ -2444,7 +2566,7 @@ export default function HomePage() {
                       handleToggleAllModels(!allOpen);
                     }}
                   >
-                    {groupedInventoryModels.every((g) => expandedModels[g.productId]) ? '▲ Thu gọn tất cả' : '▼ Mở rộng tất cả'}
+                    {groupedInventoryModels.every((g) => expandedModels[g.productId]) ? '▲ Thu gọn' : '▼ Mở rộng'}
                   </button>
                   <button
                     className="btn btn-secondary"
@@ -2459,7 +2581,7 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* Tìm kiếm & Lọc nhanh */}
+              {/* Tìm kiếm & Lọc nhanh theo Ngày & Tình trạng xuất kho */}
               <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <input
                   type="text"
@@ -2470,32 +2592,50 @@ export default function HomePage() {
                   style={{ height: 38, fontSize: '0.85rem' }}
                 />
 
-                <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2 }}>
-                  {[
-                    { key: 'ALL', label: `Tất cả (${devices.length})` },
-                    { key: 'STORAGE', label: 'Tại kho' },
-                    { key: 'EXTERNAL', label: 'Đang mượn / Khách' },
-                    { key: 'WARRANTY', label: 'Đang bảo hành' },
-                    { key: 'NEEDS_INSPECTION', label: 'Cần kiểm tra / Lỗi' },
-                  ].map((f) => (
-                    <button
-                      key={f.key}
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 'var(--radius-full)',
-                        border: '1px solid var(--border-color)',
-                        background: inventoryFilter === f.key ? 'var(--primary)' : 'var(--bg-input)',
-                        color: inventoryFilter === f.key ? '#fff' : 'var(--text-secondary)',
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        whiteSpace: 'nowrap',
-                      }}
-                      onClick={() => setInventoryFilter(f.key as any)}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
+                <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
+                  {(() => {
+                    const storageCount = devices.filter((d) => !d.outbound_date && d.holder_type === 'INTERNAL_STORAGE').length;
+                    const exportedCount = devices.filter((d) => !!d.outbound_date || d.holder_type !== 'INTERNAL_STORAGE').length;
+                    const now = new Date();
+                    const thisMonthCount = devices.filter((d) => {
+                      const inDate = d.inbound_date || d.inbound_receipt?.received_date || d.created_at;
+                      if (!inDate) return false;
+                      const dt = new Date(inDate);
+                      return dt.getFullYear() === now.getFullYear() && dt.getMonth() === now.getMonth();
+                    }).length;
+                    const externalCount = devices.filter((d) => d.holder_type === 'EXTERNAL_PARTY').length;
+                    const warrantyCount = devices.filter((d) => d.holder_type === 'SUPPLIER_WARRANTY' || !!d.active_warranty_case).length;
+                    const faultyCount = devices.filter((d) => d.technical_condition !== 'USABLE').length;
+
+                    return [
+                      { key: 'ALL', label: `Tất cả (${devices.length})` },
+                      { key: 'STORAGE', label: `🟢 Chưa xuất (${storageCount})` },
+                      { key: 'EXPORTED', label: `🟣 Đã xuất (${exportedCount})` },
+                      { key: 'THIS_MONTH', label: `📅 Nhập tháng này (${thisMonthCount})` },
+                      { key: 'EXTERNAL', label: `🟡 Đang mượn / Khách (${externalCount})` },
+                      { key: 'WARRANTY', label: `🛠️ Đang bảo hành (${warrantyCount})` },
+                      { key: 'NEEDS_INSPECTION', label: `🔴 Cần kiểm tra / Lỗi (${faultyCount})` },
+                    ].map((f) => (
+                      <button
+                        key={f.key}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: 'var(--radius-full)',
+                          border: '1px solid var(--border-color)',
+                          background: inventoryFilter === f.key ? 'var(--primary)' : 'var(--bg-input)',
+                          color: inventoryFilter === f.key ? '#fff' : 'var(--text-secondary)',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                          transition: 'all 0.15s ease',
+                        }}
+                        onClick={() => setInventoryFilter(f.key as any)}
+                      >
+                        {f.label}
+                      </button>
+                    ));
+                  })()}
                 </div>
               </div>
             </div>

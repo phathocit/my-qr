@@ -10,8 +10,14 @@ function isFatalGoogleError(err: any): boolean {
   return status === 400 || status === 401 || status === 403 || status === 404;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const { searchParams } = new URL(req.url);
+    const action = searchParams.get('action');
+    if (action === 'sync_pending' || action === 'cron') {
+      return POST(req);
+    }
+
     const configured = isGoogleSheetsConfigured();
     const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
     const maskedSpreadsheetId = spreadsheetId
