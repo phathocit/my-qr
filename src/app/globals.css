@@ -91,7 +91,7 @@ body {
 
 /* Header Bar */
 .app-header {
-  height: var(--header-height);
+  min-height: var(--header-height);
   background: rgba(30, 41, 59, 0.85);
   backdrop-filter: blur(12px);
   position: sticky;
@@ -100,17 +100,31 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--border-color);
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .app-title {
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   font-weight: 700;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: #fff;
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+  flex-shrink: 0;
+}
+
+.app-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .env-badge {
@@ -118,6 +132,7 @@ body {
   padding: 3px 8px;
   border-radius: var(--radius-full);
   font-weight: 600;
+  white-space: nowrap;
 }
 .env-badge.warning {
   background: var(--warning-bg);
@@ -138,14 +153,16 @@ body {
   transform: translateX(-50%);
   width: 100%;
   max-width: 520px;
-  height: var(--nav-height);
+  height: calc(var(--nav-height) + env(safe-area-inset-bottom, 0px));
   background: rgba(30, 41, 59, 0.95);
   backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border-top: 1px solid var(--border-color);
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   z-index: 50;
-  padding: 4px;
+  padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px)) 4px;
+  box-sizing: border-box;
 }
 
 @media (min-width: 768px) {
@@ -1046,12 +1063,12 @@ body {
 /* 1:1 Apple VisionOS Floating Pill Dock (Không dính sát viền đáy) */
 [data-theme="apple"] .bottom-nav {
   position: fixed;
-  bottom: 14px;
+  bottom: max(12px, env(safe-area-inset-bottom, 12px));
   left: 50%;
   transform: translateX(-50%);
-  width: calc(100% - 24px);
+  width: calc(100% - 16px);
   max-width: 480px;
-  height: 64px;
+  height: 62px;
   background: rgba(22, 22, 26, 0.72);
   backdrop-filter: blur(40px) saturate(210%);
   -webkit-backdrop-filter: blur(40px) saturate(210%);
@@ -1059,7 +1076,7 @@ body {
   border-radius: 36px;
   box-shadow: inset 0 1.5px 1px 0 rgba(255, 255, 255, 0.28),
               0 16px 40px rgba(0, 0, 0, 0.65);
-  padding: 4px 8px;
+  padding: 4px 6px;
 }
 
 @media (min-width: 768px) {
@@ -1407,6 +1424,256 @@ body {
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
+
+/* ═══════════════════════════════════════════════════════════════════ */
+/* ADVANCED MOBILE RESPONSIVE OPTIMIZATIONS (iOS & Android)           */
+/* ═══════════════════════════════════════════════════════════════════ */
+
+/* Mobile Safe Areas and Viewport Constraints */
+:root {
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
+}
+
+html, body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+.app-container {
+  max-width: 100vw;
+  box-sizing: border-box;
+}
+
+/* Horizontal Scroll Row for Filter Pills (Native iOS/Android Momentum Swiping) */
+.horizontal-scroll-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.horizontal-scroll-row::-webkit-scrollbar {
+  display: none;
+}
+
+/* Responsive Theme Switcher Floating Trigger */
+.theme-floating-trigger {
+  position: fixed;
+  bottom: calc(var(--nav-height) + max(16px, env(safe-area-inset-bottom, 16px)));
+  right: 14px;
+  z-index: 99;
+}
+
+.theme-switcher-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(15, 23, 42, 0.94);
+  color: #f8fafc;
+  border-radius: 24px;
+  padding: 7px 14px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+.theme-switcher-btn:active {
+  transform: scale(0.92);
+}
+
+.theme-switcher-badge {
+  font-size: 0.68rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 800;
+}
+
+/* Device Dimensions Grid (Tab 1 Detail) */
+.device-dimensions-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+@media (min-width: 480px) {
+  .device-dimensions-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.device-dimensions-grid .form-group {
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Device Date Cards Grid (Tab 1 Dates) */
+.device-date-cards-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+@media (min-width: 440px) {
+  .device-date-cards-grid {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+}
+
+/* Inventory Device Item Layout (Tab 5 Accordion) */
+.inventory-device-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inventory-device-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.inventory-device-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* Sheets Modal Stats and Reconcile Grids */
+.sheets-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  text-align: center;
+}
+
+@media (min-width: 480px) {
+  .sheets-stats-grid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+
+.sheets-reconcile-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+@media (min-width: 480px) {
+  .sheets-reconcile-grid {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}
+
+/* Small Screens (< 640px) Refinements */
+@media (max-width: 640px) {
+  .app-header {
+    padding: 6px 12px;
+  }
+
+  .app-title-long {
+    display: none !important;
+  }
+
+  .app-title-short {
+    display: inline !important;
+  }
+
+  .app-header-actions .btn {
+    padding: 3px 8px !important;
+    font-size: 0.72rem !important;
+    min-height: 28px !important;
+  }
+
+  .app-header-actions .env-badge {
+    padding: 2px 6px;
+    font-size: 0.68rem;
+  }
+
+  .theme-floating-trigger {
+    right: 10px;
+    bottom: calc(var(--nav-height) + max(16px, env(safe-area-inset-bottom, 16px)));
+  }
+
+  .theme-switcher-btn {
+    padding: 6px 10px;
+    font-size: 0.74rem;
+    gap: 4px;
+    border-radius: 20px;
+  }
+
+  .theme-switcher-text {
+    display: none;
+  }
+
+  .main-content {
+    padding: 12px 10px;
+    gap: 12px;
+  }
+
+  .card {
+    padding: 12px;
+    gap: 10px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Prevent iOS Safari 16px input auto-zoom */
+  .input, .select, .textarea {
+    font-size: 16px !important;
+    padding: 10px 12px;
+  }
+
+  /* Modal bottom-sheet padding on mobile */
+  .modal-content {
+    padding: 16px 14px;
+    padding-bottom: max(20px, calc(env(safe-area-inset-bottom, 0px) + 16px));
+    border-radius: 20px 20px 0 0;
+  }
+
+  .bottom-nav {
+    padding: 3px 2px calc(3px + env(safe-area-inset-bottom, 0px)) 2px;
+  }
+
+  .nav-item {
+    font-size: 0.64rem;
+    gap: 2px;
+    padding: 2px 1px;
+  }
+
+  .nav-item svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .badge {
+    font-size: 0.7rem;
+    padding: 2px 7px;
+  }
+}
+
+@media (min-width: 641px) {
+  .app-title-long {
+    display: inline !important;
+  }
+
+  .app-title-short {
+    display: none !important;
+  }
+}
+
 
 
 

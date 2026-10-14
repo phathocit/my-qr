@@ -1648,16 +1648,18 @@ export default function HomePage() {
       {/* Header */}
       <header className="app-header">
         <div className="app-title">
-          <span>📦 Quản Lý Thiết Bị CNTT</span>
+          <span className="app-title-long">📦 Quản Lý Thiết Bị CNTT</span>
+          <span className="app-title-short">📦 Quản Lý Kho</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <div className="app-header-actions">
           <button
             onClick={() => setExportModalOpen(true)}
             className="btn btn-primary"
-            style={{ fontSize: '0.75rem', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }}
+            style={{ fontSize: '0.75rem', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
             title="Tải báo cáo thiết bị ra file Excel định dạng chuẩn hoặc CSV"
           >
-            📊 Xuất Excel
+            <span>📊</span>
+            <span>Excel</span>
           </button>
           <button
             onClick={() => {
@@ -1665,15 +1667,16 @@ export default function HomePage() {
               fetchSheetsStatus();
             }}
             className="btn btn-secondary"
-            style={{ fontSize: '0.75rem', padding: '4px 8px', display: 'flex', alignItems: 'center', gap: 4 }}
+            style={{ fontSize: '0.75rem', padding: '4px 8px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
             title="Quan sát & Đồng bộ Google Sheets"
           >
-            📊 Sheets
+            <span>📊</span>
+            <span>Sheets</span>
           </button>
           {isMock ? (
-            <span className="env-badge warning">Demo Local (Mock)</span>
+            <span className="env-badge warning" title="Môi trường Demo Local Mock">Mock</span>
           ) : (
-            <span className="env-badge success">Supabase Cloud</span>
+            <span className="env-badge success" title="Kết nối Supabase Cloud">Cloud</span>
           )}
           {currentUser && (
             <button
@@ -1877,7 +1880,7 @@ export default function HomePage() {
                   const isOverdue = Boolean(isLoan && selectedDevice.active_assignment?.expected_return_date && selectedDevice.active_assignment.expected_return_date < todayStr);
 
                   return (
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 4 }}>
+                    <div className="device-dimensions-grid">
                       <div className="form-group">
                         <span className="form-label">Trạng thái kho vận:</span>
                         <div>
@@ -1948,7 +1951,7 @@ export default function HomePage() {
 
                 {/* Lịch sử Ngày Nhập / Xuất kho / Cho mượn */}
                 <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
                     <div style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span>📅</span>
                       <span>Theo dõi Ngày Nhập / Xuất / Dự kiến trả:</span>
@@ -1963,7 +1966,7 @@ export default function HomePage() {
                       ✏️ Sửa ngày Nhập / Xuất
                     </button>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: selectedDevice.active_assignment ? 'repeat(auto-fit, minmax(180px, 1fr))' : '1fr 1fr', gap: 10 }}>
+                  <div className="device-date-cards-grid">
                     {/* Ngày Nhập */}
                     <div
                       style={{
@@ -2920,7 +2923,7 @@ export default function HomePage() {
               </div>
 
               {/* Status Filters */}
-              <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
+              <div className="horizontal-scroll-row">
                 {[
                   { key: 'ALL', label: 'Tất cả' },
                   { key: 'RECEIVED_CUSTOMER', label: 'Tiếp nhận' },
@@ -3157,7 +3160,7 @@ export default function HomePage() {
                   style={{ height: 38, fontSize: '0.85rem' }}
                 />
 
-                <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
+                <div className="horizontal-scroll-row">
                   {(() => {
                     const loanCount = devices.filter((d) => Boolean(d.active_assignment) || (d.holder_type === 'EXTERNAL_PARTY' && d.owner_type === 'INTERNAL' && !d.outbound_receipt)).length;
                     const storageCount = devices.filter((d) => !d.active_assignment && !d.outbound_date && d.owner_type !== 'EXTERNAL' && d.holder_type === 'INTERNAL_STORAGE').length;
@@ -3359,8 +3362,8 @@ export default function HomePage() {
                                 gap: 6,
                               }}
                             >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+                              <div className="inventory-device-top-row">
+                                <div className="inventory-device-info">
                                   {/* Ảnh chụp chứng từ nếu có */}
                                   {photoUrl ? (
                                     <div
@@ -3407,7 +3410,7 @@ export default function HomePage() {
                                     </div>
                                   )}
 
-                                  <div style={{ minWidth: 0 }}>
+                                  <div style={{ minWidth: 0, flex: 1 }}>
                                     <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#93c5fd' }}>
                                       SN: {dev.serial_number || '(Không có SN)'}
                                     </div>
@@ -3447,7 +3450,7 @@ export default function HomePage() {
                                 </div>
 
                                 {/* Nút hành động */}
-                                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                                <div className="inventory-device-actions">
                                   <button
                                     type="button"
                                     className="btn btn-secondary"
@@ -4579,7 +4582,7 @@ export default function HomePage() {
                   </button>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, textAlign: 'center' }}>
+                <div className="sheets-stats-grid">
                   <div style={{ padding: '8px 4px', background: 'rgba(255,255,255,0.04)', borderRadius: 4 }}>
                     <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
                       {sheetsStatus?.outboxStats?.pending || 0}
@@ -4642,7 +4645,7 @@ export default function HomePage() {
 
               {/* Action Buttons */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+                <div className="sheets-reconcile-grid">
                   <button
                     type="button"
                     className="btn btn-primary"

@@ -102,45 +102,24 @@ export default function ThemeSwitcher() {
   return (
     <>
       {/* Nút Floating nổi ở góc phải màn hình để chuyển đổi nhanh mọi lúc */}
-      <div
-        style={{
-          position: 'fixed',
-          bottom: 76,
-          right: 14,
-          zIndex: 99,
-        }}
-      >
+      <div className="theme-floating-trigger">
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
+          className="theme-switcher-btn"
           style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            background: 'rgba(15, 23, 42, 0.94)',
-            color: '#f8fafc',
             border: `1px solid ${currentThemeObj.color}88`,
-            borderRadius: 24,
-            padding: '7px 14px',
-            fontSize: '0.78rem',
-            fontWeight: 700,
-            cursor: 'pointer',
             boxShadow: `0 8px 24px rgba(0,0,0,0.6), 0 0 12px ${currentThemeObj.color}33`,
-            backdropFilter: 'blur(12px)',
-            transition: 'all 0.2s ease',
           }}
           title="Chọn kiểu giao diện UI"
         >
-          <span>🎨</span>
-          <span>Style UI</span>
+          <span style={{ fontSize: '1rem', lineHeight: 1 }}>🎨</span>
+          <span className="theme-switcher-text">Style UI</span>
           <span
+            className="theme-switcher-badge"
             style={{
-              fontSize: '0.68rem',
-              padding: '2px 8px',
-              borderRadius: 10,
               background: currentThemeObj.color,
               color: currentTheme === 'industrial' ? '#000' : '#fff',
-              fontWeight: 800,
             }}
           >
             {getThemeShortLabel(currentTheme)}
