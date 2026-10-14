@@ -1078,10 +1078,10 @@ export default function HomePage() {
     }>();
 
     for (const dev of devices) {
-      const isExp = Boolean(dev.outbound_date) || dev.owner_type === 'EXTERNAL';
-      const isLoan = !isExp && (Boolean(dev.active_assignment) || dev.holder_type === 'EXTERNAL_PARTY');
-      const isWar = !isExp && !isLoan && (dev.holder_type === 'SUPPLIER_WARRANTY' || Boolean(dev.active_warranty_case && dev.active_warranty_case.case_status !== 'COMPLETED'));
-      const isStore = !isExp && !isLoan && !isWar;
+      const isLoan = Boolean(dev.active_assignment) || (dev.holder_type === 'EXTERNAL_PARTY' && dev.owner_type === 'INTERNAL' && !dev.outbound_receipt);
+      const isExp = !isLoan && (Boolean(dev.outbound_date) || dev.owner_type === 'EXTERNAL');
+      const isWar = !isLoan && !isExp && (dev.holder_type === 'SUPPLIER_WARRANTY' || Boolean(dev.active_warranty_case && dev.active_warranty_case.case_status !== 'COMPLETED'));
+      const isStore = !isLoan && !isExp && !isWar;
 
       // Bộ lọc danh mục tồn kho & tình trạng xuất
       if (inventoryFilter === 'STORAGE' && !isStore) continue;
@@ -1129,8 +1129,8 @@ export default function HomePage() {
         if (sup) group.supplierName = sup.name;
       }
       group.items.push(dev);
-      if (isExp) group.exportedCount++;
-      else if (isLoan) group.externalCount++;
+      if (isLoan) group.externalCount++;
+      else if (isExp) group.exportedCount++;
       else if (isWar) group.warrantyCount++;
       else if (isStore) group.inStorageCount++;
       if (dev.technical_condition !== 'USABLE') group.needsInspectionCount++;
@@ -1205,13 +1205,14 @@ export default function HomePage() {
         const tableRows = filteredDevices
           .map((dev, idx) => {
             const inDate = dev.inbound_date || dev.inbound_receipt?.received_date || dev.created_at;
-            const isExported = Boolean(dev.outbound_date) || dev.owner_type === 'EXTERNAL';
-            const isOnLoan = !isExported && (Boolean(dev.active_assignment) || dev.holder_type === 'EXTERNAL_PARTY');
-            const isInWarranty = !isExported && !isOnLoan && (dev.holder_type === 'SUPPLIER_WARRANTY' || Boolean(dev.active_warranty_case && dev.active_warranty_case.case_status !== 'COMPLETED'));
-            const outStatusText = isExported
-              ? 'Đã xuất kho'
-              : isOnLoan
-              ? 'Đang mượn / Bàn giao'
+            const isLoan = Boolean(dev.active_assignment) || (dev.holder_type === 'EXTERNAL_PARTY' && dev.owner_type === 'INTERNAL' && !dev.outbound_receipt);
+            const isExported = !isLoan && (Boolean(dev.outbound_date) || dev.owner_type === 'EXTERNAL');
+            const isInWarranty = !isLoan && !isExported && (dev.holder_type === 'SUPPLIER_WARRANTY' || Boolean(dev.active_warranty_case && dev.active_warranty_case.case_status !== 'COMPLETED'));
+            const retDate = dev.active_assignment?.expected_return_date;
+            const outStatusText = isLoan
+              ? `Cho mượn nội bộ${retDate ? ` (Dự kiến trả: ${formatDateDisplay(retDate)})` : ''}`
+              : isExported
+              ? 'Đã xuất bán / Cấp'
               : isInWarranty
               ? 'Đang bảo hành NCC'
               : dev.technical_condition === 'USABLE'
@@ -1414,13 +1415,14 @@ export default function HomePage() {
 
       const rows = filteredDevices.map((dev, idx) => {
         const inDate = dev.inbound_date || dev.inbound_receipt?.received_date || dev.created_at;
-        const isExported = Boolean(dev.outbound_date) || dev.owner_type === 'EXTERNAL';
-        const isOnLoan = !isExported && (Boolean(dev.active_assignment) || dev.holder_type === 'EXTERNAL_PARTY');
-        const isInWarranty = !isExported && !isOnLoan && (dev.holder_type === 'SUPPLIER_WARRANTY' || Boolean(dev.active_warranty_case && dev.active_warranty_case.case_status !== 'COMPLETED'));
-        const outStatus = isExported
-          ? 'Đã xuất kho'
-          : isOnLoan
-          ? 'Đang mượn / Bàn giao'
+        const isLoan = Boolean(dev.active_assignment) || (dev.holder_type === 'EXTERNAL_PARTY' && dev.owner_type === 'INTERNAL' && !dev.outbound_receipt);
+        const isExported = !isLoan && (Boolean(dev.outbound_date) || dev.owner_type === 'EXTERNAL');
+        const isInWarranty = !isLoan && !isExported && (dev.holder_type === 'SUPPLIER_WARRANTY' || Boolean(dev.active_warranty_case && dev.active_warranty_case.case_status !== 'COMPLETED'));
+        const retDate = dev.active_assignment?.expected_return_date;
+        const outStatus = isLoan
+          ? `Cho mượn nội bộ${retDate ? ` (Dự kiến trả: ${formatDateDisplay(retDate)})` : ''}`
+          : isExported
+          ? 'Đã xuất bán / Cấp'
           : isInWarranty
           ? 'Đang bảo hành NCC'
           : dev.technical_condition === 'USABLE'
@@ -1867,20 +1869,24 @@ export default function HomePage() {
 
                 {/* 4 Orthogonal Status Dimensions */}
                 {(() => {
-                  const isExp = Boolean(selectedDevice.outbound_date) || selectedDevice.owner_type === 'EXTERNAL';
-                  const isLoan = !isExp && (Boolean(selectedDevice.active_assignment) || selectedDevice.holder_type === 'EXTERNAL_PARTY');
-                  const isWar = !isExp && !isLoan && (selectedDevice.holder_type === 'SUPPLIER_WARRANTY' || Boolean(selectedDevice.active_warranty_case && selectedDevice.active_warranty_case.case_status !== 'COMPLETED'));
+                  const isLoan = Boolean(selectedDevice.active_assignment) || (selectedDevice.holder_type === 'EXTERNAL_PARTY' && selectedDevice.owner_type === 'INTERNAL' && !selectedDevice.outbound_receipt);
+                  const isExp = !isLoan && (Boolean(selectedDevice.outbound_date) || selectedDevice.owner_type === 'EXTERNAL');
+                  const isWar = !isLoan && !isExp && (selectedDevice.holder_type === 'SUPPLIER_WARRANTY' || Boolean(selectedDevice.active_warranty_case && selectedDevice.active_warranty_case.case_status !== 'COMPLETED'));
                   const readiness = inventoryService.checkOutboundReadiness(selectedDevice);
+                  const todayStr = new Date().toISOString().slice(0, 10);
+                  const isOverdue = Boolean(isLoan && selectedDevice.active_assignment?.expected_return_date && selectedDevice.active_assignment.expected_return_date < todayStr);
 
                   return (
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 4 }}>
                       <div className="form-group">
                         <span className="form-label">Trạng thái kho vận:</span>
                         <div>
-                          {isExp ? (
-                            <span className="badge badge-external" style={{ fontWeight: 600 }}>🟣 Đã xuất kho</span>
-                          ) : isLoan ? (
-                            <span className="badge badge-inspection" style={{ fontWeight: 600 }}>🟡 Đang mượn / Bàn giao</span>
+                          {isLoan ? (
+                            <span className="badge badge-loan" style={{ fontWeight: 700 }}>
+                              🤝 Cho mượn nội bộ
+                            </span>
+                          ) : isExp ? (
+                            <span className="badge badge-external" style={{ fontWeight: 600 }}>🟣 Đã xuất bán / Cấp</span>
                           ) : isWar ? (
                             <span className="badge badge-warranty" style={{ fontWeight: 600 }}>🛠️ Đang bảo hành</span>
                           ) : readiness.eligible ? (
@@ -1890,19 +1896,24 @@ export default function HomePage() {
                               🔴 Chưa thể xuất ({selectedDevice.technical_condition === 'FAULTY' ? 'Máy lỗi' : selectedDevice.technical_condition === 'NEEDS_INSPECTION' ? 'Cần kiểm tra' : 'Chưa đủ ĐK'})
                             </span>
                           )}
+                          {isOverdue && (
+                            <span className="badge badge-faulty" style={{ marginLeft: 6, fontWeight: 700 }}>
+                              ⚠️ Quá hạn trả
+                            </span>
+                          )}
                         </div>
                       </div>
 
                       <div className="form-group">
                         <span className="form-label">Bên đang giữ:</span>
                         <div>
-                          {isExp ? (
+                          {isLoan ? (
+                            <span className="badge badge-loan">
+                              👤 Người mượn: {selectedDevice.active_assignment?.recipient_party?.name || selectedDevice.holder_party?.name || 'Khách/NV giữ'}
+                            </span>
+                          ) : isExp ? (
                             <span className="badge badge-external">
                               {selectedDevice.holder_party?.name ? `Khách: ${selectedDevice.holder_party.name}` : selectedDevice.owner_party?.name ? `Khách: ${selectedDevice.owner_party.name}` : 'Bên ngoài (Đã xuất)'}
-                            </span>
-                          ) : isLoan ? (
-                            <span className="badge badge-inspection">
-                              {selectedDevice.active_assignment?.recipient_party?.name || selectedDevice.holder_party?.name || 'Khách/NV giữ'}
                             </span>
                           ) : isWar ? (
                             <span className="badge badge-warranty">Trung tâm bảo hành</span>
@@ -1935,12 +1946,12 @@ export default function HomePage() {
                   );
                 })()}
 
-                {/* Lịch sử Ngày Nhập / Xuất kho */}
+                {/* Lịch sử Ngày Nhập / Xuất kho / Cho mượn */}
                 <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span>📅</span>
-                      <span>Theo dõi Ngày Nhập / Xuất kho:</span>
+                      <span>Theo dõi Ngày Nhập / Xuất / Dự kiến trả:</span>
                     </div>
                     <button
                       type="button"
@@ -1952,7 +1963,7 @@ export default function HomePage() {
                       ✏️ Sửa ngày Nhập / Xuất
                     </button>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: selectedDevice.active_assignment ? 'repeat(auto-fit, minmax(180px, 1fr))' : '1fr 1fr', gap: 10 }}>
                     {/* Ngày Nhập */}
                     <div
                       style={{
@@ -1978,51 +1989,118 @@ export default function HomePage() {
                       </div>
                     </div>
 
-                    {/* Ngày Xuất */}
-                    <div
-                      style={{
-                        background: selectedDevice.outbound_date
-                          ? 'rgba(168, 85, 247, 0.08)'
-                          : 'rgba(34, 197, 94, 0.08)',
-                        padding: '10px 12px',
-                        borderRadius: 10,
-                        border: selectedDevice.outbound_date
-                          ? '1px solid rgba(168, 85, 247, 0.25)'
-                          : '1px solid rgba(34, 197, 94, 0.22)',
-                      }}
-                    >
+                    {/* Nếu đang cho mượn: Hiển thị Ngày Mượn & Ngày Dự Kiến Trả rõ ràng */}
+                    {selectedDevice.active_assignment ? (
+                      <>
+                        <div
+                          style={{
+                            background: 'rgba(234, 179, 8, 0.08)',
+                            padding: '10px 12px',
+                            borderRadius: 10,
+                            border: '1px solid rgba(234, 179, 8, 0.28)',
+                          }}
+                        >
+                          <div style={{ fontSize: '0.72rem', color: '#facc15', fontWeight: 700, letterSpacing: '0.02em', marginBottom: 3 }}>
+                            📤 NGÀY BÀN GIAO / MƯỢN
+                          </div>
+                          <div style={{ fontSize: '1rem', fontWeight: 700, color: '#fef08a' }}>
+                            {formatDateDisplay(selectedDevice.active_assignment.checkout_date)}
+                          </div>
+                          <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 3 }}>
+                            Mượn: {selectedDevice.active_assignment.recipient_party?.name || 'Nội bộ'}
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            background: selectedDevice.active_assignment.expected_return_date && selectedDevice.active_assignment.expected_return_date < new Date().toISOString().slice(0, 10)
+                              ? 'rgba(239, 68, 68, 0.1)'
+                              : 'rgba(56, 189, 248, 0.08)',
+                            padding: '10px 12px',
+                            borderRadius: 10,
+                            border: selectedDevice.active_assignment.expected_return_date && selectedDevice.active_assignment.expected_return_date < new Date().toISOString().slice(0, 10)
+                              ? '1px solid rgba(239, 68, 68, 0.3)'
+                              : '1px solid rgba(56, 189, 248, 0.25)',
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: '0.72rem',
+                              color: selectedDevice.active_assignment.expected_return_date && selectedDevice.active_assignment.expected_return_date < new Date().toISOString().slice(0, 10)
+                                ? '#f87171'
+                                : '#38bdf8',
+                              fontWeight: 700,
+                              letterSpacing: '0.02em',
+                              marginBottom: 3,
+                            }}
+                          >
+                            ⏳ DỰ KIẾN TRẢ
+                          </div>
+                          <div
+                            style={{
+                              fontSize: '1rem',
+                              fontWeight: 700,
+                              color: selectedDevice.active_assignment.expected_return_date && selectedDevice.active_assignment.expected_return_date < new Date().toISOString().slice(0, 10)
+                                ? '#f87171'
+                                : '#e0f2fe',
+                            }}
+                          >
+                            {selectedDevice.active_assignment.expected_return_date
+                              ? formatDateDisplay(selectedDevice.active_assignment.expected_return_date)
+                              : 'Chưa định ngày'}
+                          </div>
+                          <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 3 }}>
+                            {selectedDevice.active_assignment.expected_return_date && selectedDevice.active_assignment.expected_return_date < new Date().toISOString().slice(0, 10)
+                              ? '⚠️ Đã quá hạn thu hồi!'
+                              : 'Có thể thu hồi sớm về kho'}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      /* Ngày Xuất bình thường (Bán / Cấp / Trong kho) */
                       <div
                         style={{
-                          fontSize: '0.72rem',
-                          color: selectedDevice.outbound_date ? '#c084fc' : '#86efac',
-                          fontWeight: 700,
-                          letterSpacing: '0.02em',
-                          marginBottom: 3,
+                          background: selectedDevice.outbound_date
+                            ? 'rgba(168, 85, 247, 0.08)'
+                            : 'rgba(34, 197, 94, 0.08)',
+                          padding: '10px 12px',
+                          borderRadius: 10,
+                          border: selectedDevice.outbound_date
+                            ? '1px solid rgba(168, 85, 247, 0.25)'
+                            : '1px solid rgba(34, 197, 94, 0.22)',
                         }}
                       >
-                        📤 NGÀY XUẤT KHO
+                        <div
+                          style={{
+                            fontSize: '0.72rem',
+                            color: selectedDevice.outbound_date ? '#c084fc' : '#86efac',
+                            fontWeight: 700,
+                            letterSpacing: '0.02em',
+                            marginBottom: 3,
+                          }}
+                        >
+                          📤 NGÀY XUẤT BÁN / CẤP
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '1rem',
+                            fontWeight: 700,
+                            color: selectedDevice.outbound_date ? '#f8fafc' : 'var(--success)',
+                          }}
+                        >
+                          {selectedDevice.outbound_date
+                            ? formatDateDisplay(selectedDevice.outbound_date)
+                            : 'Chưa xuất kho (Trong kho)'}
+                        </div>
+                        <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 3 }}>
+                          {selectedDevice.outbound_receipt?.code
+                            ? `Phiếu: ${selectedDevice.outbound_receipt.code}`
+                            : selectedDevice.owner_type === 'EXTERNAL'
+                            ? `Đã bàn giao: ${selectedDevice.owner_party?.name || 'Khách'}`
+                            : 'Thiết bị sẵn sàng trong kho'}
+                        </div>
                       </div>
-                      <div
-                        style={{
-                          fontSize: '1rem',
-                          fontWeight: 700,
-                          color: selectedDevice.outbound_date ? '#f8fafc' : 'var(--success)',
-                        }}
-                      >
-                        {selectedDevice.outbound_date
-                          ? formatDateDisplay(selectedDevice.outbound_date)
-                          : 'Chưa xuất kho (Trong kho)'}
-                      </div>
-                      <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 3 }}>
-                        {selectedDevice.outbound_receipt?.code
-                          ? `Phiếu: ${selectedDevice.outbound_receipt.code}`
-                          : selectedDevice.active_assignment
-                          ? `Đang mượn: ${selectedDevice.active_assignment.recipient_party?.name || 'Khách/NV'}`
-                          : selectedDevice.owner_type === 'EXTERNAL'
-                          ? `Đã bàn giao: ${selectedDevice.owner_party?.name || 'Khách'}`
-                          : 'Thiết bị sẵn sàng trong kho'}
-                      </div>
-                    </div>
+                    )}
                   </div>
                 </div>
 
@@ -3081,8 +3159,9 @@ export default function HomePage() {
 
                 <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
                   {(() => {
-                    const storageCount = devices.filter((d) => !d.outbound_date && d.owner_type !== 'EXTERNAL' && !d.active_assignment && d.holder_type === 'INTERNAL_STORAGE').length;
-                    const exportedCount = devices.filter((d) => !!d.outbound_date || d.owner_type === 'EXTERNAL').length;
+                    const loanCount = devices.filter((d) => Boolean(d.active_assignment) || (d.holder_type === 'EXTERNAL_PARTY' && d.owner_type === 'INTERNAL' && !d.outbound_receipt)).length;
+                    const storageCount = devices.filter((d) => !d.active_assignment && !d.outbound_date && d.owner_type !== 'EXTERNAL' && d.holder_type === 'INTERNAL_STORAGE').length;
+                    const exportedCount = devices.filter((d) => !d.active_assignment && (Boolean(d.outbound_date) || d.owner_type === 'EXTERNAL')).length;
                     const now = new Date();
                     const thisMonthCount = devices.filter((d) => {
                       const inDate = d.inbound_date || d.inbound_receipt?.received_date || d.created_at;
@@ -3090,16 +3169,15 @@ export default function HomePage() {
                       const dt = new Date(inDate);
                       return dt.getFullYear() === now.getFullYear() && dt.getMonth() === now.getMonth();
                     }).length;
-                    const externalCount = devices.filter((d) => !d.outbound_date && d.owner_type !== 'EXTERNAL' && (d.holder_type === 'EXTERNAL_PARTY' || !!d.active_assignment)).length;
-                    const warrantyCount = devices.filter((d) => !d.outbound_date && (d.holder_type === 'SUPPLIER_WARRANTY' || (!!d.active_warranty_case && d.active_warranty_case.case_status !== 'COMPLETED'))).length;
+                    const warrantyCount = devices.filter((d) => !d.active_assignment && (d.holder_type === 'SUPPLIER_WARRANTY' || (d.active_warranty_case != null && d.active_warranty_case.case_status !== 'COMPLETED'))).length;
                     const faultyCount = devices.filter((d) => d.technical_condition !== 'USABLE').length;
 
                     return [
                       { key: 'ALL', label: `Tất cả (${devices.length})` },
                       { key: 'STORAGE', label: `🟢 Trong kho (${storageCount})` },
-                      { key: 'EXPORTED', label: `🟣 Đã xuất kho (${exportedCount})` },
+                      { key: 'EXTERNAL', label: `🤝 Đang cho mượn (${loanCount})` },
+                      { key: 'EXPORTED', label: `🟣 Đã xuất bán / cấp (${exportedCount})` },
                       { key: 'THIS_MONTH', label: `📅 Nhập tháng này (${thisMonthCount})` },
-                      { key: 'EXTERNAL', label: `🟡 Đang mượn / Bàn giao (${externalCount})` },
                       { key: 'WARRANTY', label: `🛠️ Đang bảo hành (${warrantyCount})` },
                       { key: 'NEEDS_INSPECTION', label: `🔴 Cần kiểm tra / Lỗi (${faultyCount})` },
                     ].map((f) => (
@@ -3220,14 +3298,14 @@ export default function HomePage() {
                         <span style={{ color: 'var(--success)' }}>
                           🟢 {group.inStorageCount} trong kho
                         </span>
-                        {group.exportedCount > 0 && (
-                          <span style={{ color: 'var(--purple)' }}>
-                            🟣 {group.exportedCount} đã xuất
+                        {group.externalCount > 0 && (
+                          <span style={{ color: '#facc15', fontWeight: 600 }}>
+                            🤝 {group.externalCount} đang cho mượn
                           </span>
                         )}
-                        {group.externalCount > 0 && (
-                          <span style={{ color: 'var(--warning)' }}>
-                            🟡 {group.externalCount} khách/mượn
+                        {group.exportedCount > 0 && (
+                          <span style={{ color: 'var(--purple)' }}>
+                            🟣 {group.exportedCount} đã xuất bán
                           </span>
                         )}
                         {group.warrantyCount > 0 && (
@@ -3257,10 +3335,12 @@ export default function HomePage() {
                         }}
                       >
                         {group.items.map((dev) => {
-                          const isExported = Boolean(dev.outbound_date) || dev.owner_type === 'EXTERNAL';
-                          const isOnLoan = !isExported && (Boolean(dev.active_assignment) || dev.holder_type === 'EXTERNAL_PARTY');
-                          const isInWarranty = !isExported && !isOnLoan && (dev.holder_type === 'SUPPLIER_WARRANTY' || Boolean(dev.active_warranty_case && dev.active_warranty_case.case_status !== 'COMPLETED'));
+                          const isLoan = Boolean(dev.active_assignment) || (dev.holder_type === 'EXTERNAL_PARTY' && dev.owner_type === 'INTERNAL' && !dev.outbound_receipt);
+                          const isExported = !isLoan && (Boolean(dev.outbound_date) || dev.owner_type === 'EXTERNAL');
+                          const isInWarranty = !isLoan && !isExported && (dev.holder_type === 'SUPPLIER_WARRANTY' || Boolean(dev.active_warranty_case && dev.active_warranty_case.case_status !== 'COMPLETED'));
                           const readiness = inventoryService.checkOutboundReadiness(dev);
+                          const todayStr = new Date().toISOString().slice(0, 10);
+                          const isOverdue = Boolean(isLoan && dev.active_assignment?.expected_return_date && dev.active_assignment.expected_return_date < todayStr);
                           const photoUrl = dev.photo_url || 
                             (dev.evidence_photos && dev.evidence_photos.length > 0
                               ? inventoryService.resolvePhotoUrl(dev.evidence_photos[0].storage_key)
@@ -3334,19 +3414,34 @@ export default function HomePage() {
                                     <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
                                       Mã QL: <strong>{dev.management_code}</strong>
                                     </div>
-                                    {/* Ngày nhập / xuất kho */}
+                                    {/* Ngày nhập / xuất kho / cho mượn & Dự kiến trả */}
                                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: '0.73rem', marginTop: 3 }}>
                                       <span style={{ color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
                                         📥 Nhập: <strong style={{ color: '#f8fafc' }}>{formatDateDisplay(dev.inbound_date || dev.inbound_receipt?.received_date || dev.created_at)}</strong>
                                       </span>
-                                      <span style={{ color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                                        📤 Xuất:{' '}
-                                        {dev.outbound_date ? (
-                                          <strong style={{ color: '#c084fc' }}>{formatDateDisplay(dev.outbound_date)}</strong>
-                                        ) : (
-                                          <span style={{ color: 'var(--success)', fontWeight: 600 }}>Chưa xuất</span>
-                                        )}
-                                      </span>
+                                      {isLoan ? (
+                                        <>
+                                          <span style={{ color: '#facc15', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                            📤 Mượn: <strong>{formatDateDisplay(dev.active_assignment?.checkout_date || dev.outbound_date)}</strong>
+                                          </span>
+                                          <span style={{ color: isOverdue ? 'var(--danger)' : '#38bdf8', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                            ⏳ Dự kiến trả:{' '}
+                                            <strong style={{ color: isOverdue ? '#f87171' : '#7dd3fc', textDecoration: isOverdue ? 'underline' : 'none' }}>
+                                              {dev.active_assignment?.expected_return_date ? formatDateDisplay(dev.active_assignment.expected_return_date) : 'Chưa định ngày'}
+                                            </strong>
+                                            {isOverdue && <span style={{ color: 'var(--danger)', fontWeight: 700 }}>(Quá hạn!)</span>}
+                                          </span>
+                                        </>
+                                      ) : (
+                                        <span style={{ color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                          📤 Xuất:{' '}
+                                          {dev.outbound_date ? (
+                                            <strong style={{ color: '#c084fc' }}>{formatDateDisplay(dev.outbound_date)}</strong>
+                                          ) : (
+                                            <span style={{ color: 'var(--success)', fontWeight: 600 }}>Chưa xuất</span>
+                                          )}
+                                        </span>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -3379,13 +3474,13 @@ export default function HomePage() {
                               {/* Badges trạng thái */}
                               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                                 {/* 1. Trạng thái Vận hành / Xuất kho */}
-                                {isExported ? (
-                                  <span className="badge badge-external" style={{ fontWeight: 600 }}>
-                                    🟣 Đã xuất kho
+                                {isLoan ? (
+                                  <span className="badge badge-loan" style={{ fontWeight: 700 }}>
+                                    🤝 Cho mượn nội bộ
                                   </span>
-                                ) : isOnLoan ? (
-                                  <span className="badge badge-inspection" style={{ fontWeight: 600 }}>
-                                    🟡 Đang mượn / Bàn giao
+                                ) : isExported ? (
+                                  <span className="badge badge-external" style={{ fontWeight: 600 }}>
+                                    🟣 Đã xuất bán / Cấp
                                   </span>
                                 ) : isInWarranty ? (
                                   <span className="badge badge-warranty" style={{ fontWeight: 600 }}>
@@ -3405,12 +3500,19 @@ export default function HomePage() {
                                   </span>
                                 )}
 
+                                {/* 1.1 Cảnh báo quá hạn nếu có */}
+                                {isOverdue && (
+                                  <span className="badge badge-faulty" style={{ fontWeight: 700 }}>
+                                    ⚠️ Quá hạn trả ({formatDateDisplay(dev.active_assignment?.expected_return_date)})
+                                  </span>
+                                )}
+
                                 {/* 2. Vị trí vật lý / Bên đang giữ */}
                                 <span className="badge badge-storage">
-                                  {isExported
+                                  {isLoan
+                                    ? `Người mượn: ${dev.active_assignment?.recipient_party?.name || dev.holder_party?.name || 'Khách/NV'}`
+                                    : isExported
                                     ? (dev.holder_party?.name ? `Khách: ${dev.holder_party.name}` : dev.owner_party?.name ? `Khách: ${dev.owner_party.name}` : 'Bên ngoài (Đã xuất)')
-                                    : isOnLoan
-                                    ? (dev.active_assignment?.recipient_party?.name ? `Mượn: ${dev.active_assignment.recipient_party.name}` : dev.holder_party?.name ? `Mượn: ${dev.holder_party.name}` : 'Đang cho mượn')
                                     : isInWarranty
                                     ? 'Tại TTBH / Nhà cung cấp'
                                     : 'Tại kho nội bộ'}
@@ -3434,10 +3536,11 @@ export default function HomePage() {
                                 {dev.active_assignment && (
                                   <button
                                     className="btn btn-warning"
-                                    style={{ padding: '2px 8px', minHeight: 24, fontSize: '0.72rem', marginLeft: 'auto' }}
+                                    style={{ padding: '3px 10px', minHeight: 26, fontSize: '0.74rem', marginLeft: 'auto', fontWeight: 600 }}
                                     onClick={() => setReturnDevice(dev)}
+                                    title="Thu hồi máy mượn về kho"
                                   >
-                                    Thu hồi
+                                    🔄 Thu hồi máy mượn
                                   </button>
                                 )}
                               </div>

@@ -291,6 +291,7 @@ body {
 
 .badge-storage { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; }
 .badge-warranty { background: rgba(236, 72, 153, 0.15); color: #f472b6; }
+.badge-loan { background: rgba(234, 179, 8, 0.18); color: #eab308; border: 1px solid rgba(234, 179, 8, 0.38); font-weight: 700; }
 
 /* Buttons & Tactile Feedback */
 .btn {
@@ -1206,6 +1207,12 @@ body {
   border: 1px solid rgba(191, 90, 242, 0.35);
 }
 
+[data-theme="apple"] .badge-loan {
+  background: rgba(255, 214, 10, 0.2);
+  color: #ffd60a;
+  border: 1px solid rgba(255, 214, 10, 0.4);
+}
+
 [data-theme="apple"] .toast-notice {
   border-radius: 20px;
   backdrop-filter: blur(30px);
@@ -1388,6 +1395,12 @@ body {
   background: rgba(139, 92, 246, 0.18);
   color: #a78bfa;
   border: 1px solid rgba(139, 92, 246, 0.4);
+}
+
+[data-theme="technical"] .badge-loan {
+  background: rgba(234, 179, 8, 0.18);
+  color: #fde047;
+  border: 1px solid rgba(234, 179, 8, 0.45);
 }
 
 [data-theme="technical"] .toast-notice {
