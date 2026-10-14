@@ -396,8 +396,9 @@ export default function ScannerModal({
     []
   );
 
-  // ─── TÍNH TOÁN VÙNG QUÉT ROI VỚI LỀ ĐỆM AN TOÀN +35% ────────────
-  // Có margin padding rộng rãi để không bao giờ cắt cụt quiet zone và mã lệch góc
+  // ─── TÍNH TOÁN VÙNG QUÉT ROI CHUẨN XÁC THEO KHUNG NGẮM (VIEWFINDER BOX) ───
+  // Khóa chặt việc quét trong đúng khung viền trực quan trên màn hình
+  // Kèm lề đệm an toàn 6% (Quiet Zone) để mã không bị hụt mép
   const calculateExactRoi = useCallback(() => {
     const video = videoRef.current;
     const container = videoContainerRef.current;
@@ -416,28 +417,31 @@ export default function ScannerModal({
 
     // Tỷ lệ co giãn của video khi áp dụng CSS object-fit: cover
     const scale = Math.max(cw / vw, ch / vh);
-    const renderedW = vw * scale;
-    const renderedH = vh * scale;
 
-    // Khoảng video bị tràn ra ngoài viền khung chứa
-    const offsetX = (renderedW - cw) / 2;
-    const offsetY = (renderedH - ch) / 2;
+    // Xử lý zoom kỹ thuật số 2x (nếu đang bật zoom 2x phần mềm)
+    const isSoftwareZoom = !isHardwareZoomActiveRef.current && zoomLevelRef.current > 1;
+    const zoomFactor = isSoftwareZoom ? 2 : 1;
+    const effectiveScale = scale * zoomFactor;
 
-    // Tọa độ khung ngắm bên trong container
-    const boxX = boxRect.left - containerRect.left;
-    const boxY = boxRect.top - containerRect.top;
-    const boxW = boxRect.width;
-    const boxH = boxRect.height;
+    // Tọa độ tâm khung ngắm và tâm container
+    const boxCenterX = (boxRect.left + boxRect.right) / 2 - containerRect.left;
+    const boxCenterY = (boxRect.top + boxRect.bottom) / 2 - containerRect.top;
+    const containerCenterX = cw / 2;
+    const containerCenterY = ch / 2;
 
-    // Quy đổi sang pixel thực của cảm biến camera
-    const rawCropX = (boxX + offsetX) / scale;
-    const rawCropY = (boxY + offsetY) / scale;
-    const rawCropW = boxW / scale;
-    const rawCropH = boxH / scale;
+    const rawCropW = boxRect.width / effectiveScale;
+    const rawCropH = boxRect.height / effectiveScale;
 
-    // Mở rộng thêm 35% mỗi phía để chống cắt cụt các thanh vạch đầu cuối và lề trắng
-    const padW = rawCropW * 0.35;
-    const padH = rawCropH * 0.35;
+    const rawCropCenterX = vw / 2 + (boxCenterX - containerCenterX) / effectiveScale;
+    const rawCropCenterY = vh / 2 + (boxCenterY - containerCenterY) / effectiveScale;
+
+    const rawCropX = rawCropCenterX - rawCropW / 2;
+    const rawCropY = rawCropCenterY - rawCropH / 2;
+
+    // Lề đệm Quiet Zone tối thiểu 6% để đầu đọc đọc được thanh vạch đầu cuối
+    // KHÔNG mở rộng ra ngoài khung ngắm
+    const padW = rawCropW * 0.06;
+    const padH = rawCropH * 0.06;
 
     const cropX = Math.max(0, Math.floor(rawCropX - padW));
     const cropY = Math.max(0, Math.floor(rawCropY - padH));
@@ -523,46 +527,40 @@ export default function ScannerModal({
         if (vw > 0 && vh > 0) {
           metricsRef.current.actualResolution = `${vw}x${vh}`;
 
-          const currentZoom = zoomLevelRef.current;
-          const isHwZoom = isHardwareZoomActiveRef.current;
-          const isSoftwareZoom2x = currentZoom > 1 && !isHwZoom;
+          // Tính toán ROI chuẩn xác tuyệt đối theo khung ngắm trên màn hình
+          const roi = calculateExactRoi();
+          if (!roi) {
+            scheduleNextFrame();
+            return;
+          }
+
+          // Cắt ĐÚNG vùng trong khung ngắm vào canvas
+          // Giới hạn max width 720px: Giữ nguyên độ nét 1:1 cho tem vạch siêu nhỏ mà tốn cực ít RAM & GPU
+          const tCropStart = performance.now();
+          const targetW = Math.min(roi.cropW, 720);
+          const targetH = Math.round((targetW / roi.cropW) * roi.cropH);
+          if (canvas.width !== targetW || canvas.height !== targetH) {
+            canvas.width = targetW;
+            canvas.height = targetH;
+          }
+          ctx.drawImage(video, roi.cropX, roi.cropY, roi.cropW, roi.cropH, 0, 0, targetW, targetH);
+          const cropDuration = Math.round((performance.now() - tCropStart) * 10) / 10;
+          metricsRef.current.cropTimeMs = cropDuration;
 
           // ── BƯỚC 1: HARDWARE NATIVE BARCODE DETECTOR (NẾU HỖ TRỢ TRÊN THIẾT BỊ) ──
+          // TUYỆT ĐỐI chỉ quét trên canvas đã được crop theo khung ngắm
+          // Không bao giờ quét full video để tránh nhận diện mã vạch bên ngoài
           if (nativeBarcodeDetector) {
             try {
               const tNativeStart = performance.now();
-              let detections: any[] = [];
-
-              if (isSoftwareZoom2x) {
-                // Zoom 2x kỹ thuật số: Crop tâm 50% độ nét cao 1:1 cho Native Detector
-                const cropW = Math.round(vw * 0.5);
-                const cropH = Math.round(vh * 0.5);
-                const cropX = Math.round((vw - cropW) / 2);
-                const cropY = Math.round((vh - cropH) / 2);
-                const targetCropW = Math.min(cropW, 640);
-                const targetCropH = Math.round((targetCropW / cropW) * cropH);
-                if (canvas.width !== targetCropW || canvas.height !== targetCropH) {
-                  canvas.width = targetCropW;
-                  canvas.height = targetCropH;
-                }
-                ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetCropW, targetCropH);
-                detections = await nativeBarcodeDetector.detect(canvas);
-              } else {
-                detections = await nativeBarcodeDetector.detect(video);
-              }
+              const detections = await nativeBarcodeDetector.detect(canvas);
 
               if (detections && detections.length > 0 && detections[0]?.rawValue) {
                 const detectDuration = Math.round((performance.now() - tNativeStart) * 10) / 10;
                 metricsRef.current.decodeTimeMs = detectDuration;
                 metricsRef.current.activeGear = 'fast';
 
-                if (!isSoftwareZoom2x) {
-                  canvas.width = Math.min(vw, 800);
-                  canvas.height = Math.round((canvas.width / vw) * vh);
-                  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                }
                 const exactPhoto = canvas.toDataURL('image/jpeg', 0.85);
-
                 onCodeFound(detections[0].rawValue, detections[0].format || 'BARCODE', exactPhoto);
                 return;
               }
@@ -571,53 +569,9 @@ export default function ScannerModal({
             }
           }
 
-          // ── BƯỚC 2: ZXING C++ WASM ENGINE (DUAL-PASS: FULL FRAME + CENTER HIGH-RES) ──
+          // ── BƯỚC 2: ZXING C++ WASM ENGINE (KHÓA CHẶT TRONG KHUNG NGẮM) ──
           if (readBarcodesFromImageData) {
-            const tCropStart = performance.now();
-            let targetW: number;
-            let targetH: number;
-
-            if (isSoftwareZoom2x) {
-              // Zoom 2x kỹ thuật số: Crop tâm 50% nguyên bản cảm biến (độ nét tối đa cho tem nhỏ)
-              const cropW = Math.round(vw * 0.5);
-              const cropH = Math.round(vh * 0.5);
-              const cropX = Math.round((vw - cropW) / 2);
-              const cropY = Math.round((vh - cropH) / 2);
-              targetW = Math.min(cropW, 640);
-              targetH = Math.round((targetW / cropW) * cropH);
-              if (canvas.width !== targetW || canvas.height !== targetH) {
-                canvas.width = targetW;
-                canvas.height = targetH;
-              }
-              ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH);
-            } else {
-              const roi = calculateExactRoi();
-              const isCenterPass = totalFrames % 2 === 0 && roi !== null;
-
-              if (isCenterPass && roi) {
-                // Giới hạn max 640px cho vùng tâm: cực nét nhưng tốn ít RAM & CPU
-                targetW = Math.min(roi.cropW, 640);
-                targetH = Math.round((targetW / roi.cropW) * roi.cropH);
-                if (canvas.width !== targetW || canvas.height !== targetH) {
-                  canvas.width = targetW;
-                  canvas.height = targetH;
-                }
-                ctx.drawImage(video, roi.cropX, roi.cropY, roi.cropW, roi.cropH, 0, 0, targetW, targetH);
-              } else {
-                // Giới hạn max 800px cho toàn khung hình
-                targetW = Math.min(vw, 800);
-                targetH = Math.round((targetW / vw) * vh);
-                if (canvas.width !== targetW || canvas.height !== targetH) {
-                  canvas.width = targetW;
-                  canvas.height = targetH;
-                }
-                ctx.drawImage(video, 0, 0, targetW, targetH);
-              }
-            }
-
             const imageData = ctx.getImageData(0, 0, targetW, targetH);
-            const cropDuration = Math.round((performance.now() - tCropStart) * 10) / 10;
-            metricsRef.current.cropTimeMs = cropDuration;
 
             const elapsedSinceStart = performance.now() - scanStartTimestampRef.current;
             // Chiến thuật phân tầng thông minh (Tiered):
