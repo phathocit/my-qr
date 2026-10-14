@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 
-export type UiTheme = 'glass' | 'dashboard' | 'industrial' | 'apple';
+export type UiTheme = 'glass' | 'dashboard' | 'industrial' | 'apple' | 'technical';
 
 interface ThemeOption {
   id: UiTheme;
@@ -21,6 +21,14 @@ const THEME_OPTIONS: ThemeOption[] = [
     desc: 'Kính acrylic mờ siêu thực, viền khúc xạ ánh sáng (Specular Highlight), bo góc mềm Squircle sang trọng.',
     color: '#0a84ff',
     previewBorder: '1px solid rgba(10, 132, 255, 0.4)',
+  },
+  {
+    id: 'technical',
+    title: '💻 5. Tech Minimalist (Kỹ thuật cơ bản)',
+    badge: 'Kỹ thuật / Basic',
+    desc: 'Thiết kế phẳng tinh gọn, lưới kỹ thuật sắc nét, font chuẩn số liệu, tối ưu tốc độ đọc thông số & serial.',
+    color: '#38bdf8',
+    previewBorder: '1px solid rgba(56, 189, 248, 0.6)',
   },
   {
     id: 'glass',
@@ -55,7 +63,7 @@ export default function ThemeSwitcher() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem('my_qr_theme') as UiTheme;
-      const validThemes: UiTheme[] = ['apple', 'glass', 'dashboard', 'industrial'];
+      const validThemes: UiTheme[] = ['apple', 'glass', 'dashboard', 'industrial', 'technical'];
       if (saved && validThemes.includes(saved)) {
         setCurrentTheme(saved);
         document.documentElement.setAttribute('data-theme', saved);
@@ -81,6 +89,7 @@ export default function ThemeSwitcher() {
   const getThemeShortLabel = (theme: UiTheme) => {
     switch (theme) {
       case 'apple': return 'Apple Glass';
+      case 'technical': return 'Technical';
       case 'glass': return 'Glass';
       case 'dashboard': return 'SaaS';
       case 'industrial': return 'Warehouse';
