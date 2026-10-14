@@ -261,6 +261,17 @@ class InventoryService {
 
     dev.outbound_date = outDate;
     dev.outbound_receipt = outReceipt;
+
+    // Tự động đồng bộ trạng thái kho vận và quyền sở hữu nếu đã có ngày xuất
+    if (outDate) {
+      if (dev.holder_type === 'INTERNAL_STORAGE') {
+        dev.holder_type = 'EXTERNAL_PARTY';
+      }
+      if (dev.owner_type === 'INTERNAL' && !dev.active_assignment) {
+        dev.owner_type = 'EXTERNAL';
+      }
+    }
+
     return dev as Device;
   }
 
@@ -364,6 +375,9 @@ class InventoryService {
 
   // --- BUSINESS RULES & READINESS ---
   checkOutboundReadiness(device: Device): { eligible: boolean; reason?: string } {
+    if (device.outbound_date) {
+      return { eligible: false, reason: 'Thiết bị đã xuất kho trước đó' };
+    }
     if (device.owner_type !== 'INTERNAL') {
       return { eligible: false, reason: 'Thiết bị không thuộc sở hữu nội bộ (đã bán hoặc chuyển giao)' };
     }
@@ -1330,6 +1344,8 @@ class InventoryService {
         } else {
           dev.outbound_receipt.outbound_date = params.outbound_date;
           dev.outbound_receipt.notes = dev.outbound_receipt.notes ? `${dev.outbound_receipt.notes}\n${auditStamp}` : auditStamp;
+          dev.holder_type = 'EXTERNAL_PARTY';
+          dev.owner_type = 'EXTERNAL';
         }
         if (dev.active_assignment) {
           dev.active_assignment.checkout_date = new Date(params.outbound_date + 'T00:00:00Z').toISOString();

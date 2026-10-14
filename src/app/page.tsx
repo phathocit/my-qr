@@ -1071,15 +1071,21 @@ export default function HomePage() {
       supplierName: string | null;
       items: Device[];
       inStorageCount: number;
+      exportedCount: number;
       externalCount: number;
       warrantyCount: number;
       needsInspectionCount: number;
     }>();
 
     for (const dev of devices) {
+      const isExp = Boolean(dev.outbound_date) || dev.owner_type === 'EXTERNAL';
+      const isLoan = !isExp && (Boolean(dev.active_assignment) || dev.holder_type === 'EXTERNAL_PARTY');
+      const isWar = !isExp && !isLoan && (dev.holder_type === 'SUPPLIER_WARRANTY' || Boolean(dev.active_warranty_case && dev.active_warranty_case.case_status !== 'COMPLETED'));
+      const isStore = !isExp && !isLoan && !isWar;
+
       // Bộ lọc danh mục tồn kho & tình trạng xuất
-      if (inventoryFilter === 'STORAGE' && (dev.outbound_date || dev.holder_type !== 'INTERNAL_STORAGE')) continue;
-      if (inventoryFilter === 'EXPORTED' && !dev.outbound_date && dev.holder_type === 'INTERNAL_STORAGE') continue;
+      if (inventoryFilter === 'STORAGE' && !isStore) continue;
+      if (inventoryFilter === 'EXPORTED' && !isExp) continue;
       if (inventoryFilter === 'THIS_MONTH') {
         const inDate = dev.inbound_date || dev.inbound_receipt?.received_date || dev.created_at;
         if (!inDate) continue;
@@ -1087,8 +1093,8 @@ export default function HomePage() {
         const now = new Date();
         if (d.getFullYear() !== now.getFullYear() || d.getMonth() !== now.getMonth()) continue;
       }
-      if (inventoryFilter === 'EXTERNAL' && dev.holder_type !== 'EXTERNAL_PARTY') continue;
-      if (inventoryFilter === 'WARRANTY' && dev.holder_type !== 'SUPPLIER_WARRANTY' && !dev.active_warranty_case) continue;
+      if (inventoryFilter === 'EXTERNAL' && !isLoan) continue;
+      if (inventoryFilter === 'WARRANTY' && !isWar) continue;
       if (inventoryFilter === 'NEEDS_INSPECTION' && dev.technical_condition === 'USABLE') continue;
 
       // Bộ lọc từ khóa
@@ -1111,6 +1117,7 @@ export default function HomePage() {
           supplierName: sup?.name || null,
           items: [],
           inStorageCount: 0,
+          exportedCount: 0,
           externalCount: 0,
           warrantyCount: 0,
           needsInspectionCount: 0,
@@ -1122,9 +1129,10 @@ export default function HomePage() {
         if (sup) group.supplierName = sup.name;
       }
       group.items.push(dev);
-      if (dev.holder_type === 'INTERNAL_STORAGE') group.inStorageCount++;
-      if (dev.holder_type === 'EXTERNAL_PARTY') group.externalCount++;
-      if (dev.holder_type === 'SUPPLIER_WARRANTY' || dev.active_warranty_case) group.warrantyCount++;
+      if (isExp) group.exportedCount++;
+      else if (isLoan) group.externalCount++;
+      else if (isWar) group.warrantyCount++;
+      else if (isStore) group.inStorageCount++;
       if (dev.technical_condition !== 'USABLE') group.needsInspectionCount++;
     }
 
@@ -1185,7 +1193,7 @@ export default function HomePage() {
           : 'Cần kiểm tra';
 
       filteredDevices.forEach((d) => {
-        if (d.outbound_date) exportedCount++;
+        if (d.outbound_date || d.owner_type === 'EXTERNAL') exportedCount++;
         else inStockCount++;
 
         if (d.technical_condition === 'USABLE') usableCount++;
@@ -1197,12 +1205,18 @@ export default function HomePage() {
         const tableRows = filteredDevices
           .map((dev, idx) => {
             const inDate = dev.inbound_date || dev.inbound_receipt?.received_date || dev.created_at;
-            const isExported = !!dev.outbound_date;
+            const isExported = Boolean(dev.outbound_date) || dev.owner_type === 'EXTERNAL';
+            const isOnLoan = !isExported && (Boolean(dev.active_assignment) || dev.holder_type === 'EXTERNAL_PARTY');
+            const isInWarranty = !isExported && !isOnLoan && (dev.holder_type === 'SUPPLIER_WARRANTY' || Boolean(dev.active_warranty_case && dev.active_warranty_case.case_status !== 'COMPLETED'));
             const outStatusText = isExported
               ? 'Đã xuất kho'
-              : dev.holder_type === 'EXTERNAL_PARTY'
+              : isOnLoan
               ? 'Đang mượn / Bàn giao'
-              : 'Trong kho (Sẵn sàng)';
+              : isInWarranty
+              ? 'Đang bảo hành NCC'
+              : dev.technical_condition === 'USABLE'
+              ? 'Trong kho (Sẵn sàng xuất)'
+              : 'Trong kho (Chưa thể xuất)';
 
             const holderText =
               dev.holder_type === 'INTERNAL_STORAGE'
@@ -1400,11 +1414,18 @@ export default function HomePage() {
 
       const rows = filteredDevices.map((dev, idx) => {
         const inDate = dev.inbound_date || dev.inbound_receipt?.received_date || dev.created_at;
-        const outStatus = dev.outbound_date
+        const isExported = Boolean(dev.outbound_date) || dev.owner_type === 'EXTERNAL';
+        const isOnLoan = !isExported && (Boolean(dev.active_assignment) || dev.holder_type === 'EXTERNAL_PARTY');
+        const isInWarranty = !isExported && !isOnLoan && (dev.holder_type === 'SUPPLIER_WARRANTY' || Boolean(dev.active_warranty_case && dev.active_warranty_case.case_status !== 'COMPLETED'));
+        const outStatus = isExported
           ? 'Đã xuất kho'
-          : dev.holder_type === 'EXTERNAL_PARTY'
+          : isOnLoan
           ? 'Đang mượn / Bàn giao'
-          : 'Chưa xuất (Trong kho)';
+          : isInWarranty
+          ? 'Đang bảo hành NCC'
+          : dev.technical_condition === 'USABLE'
+          ? 'Trong kho (Sẵn sàng xuất)'
+          : 'Trong kho (Chưa thể xuất)';
         const holder =
           dev.holder_type === 'INTERNAL_STORAGE'
             ? 'Kho nội bộ'
@@ -1845,44 +1866,74 @@ export default function HomePage() {
                 </div>
 
                 {/* 4 Orthogonal Status Dimensions */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 4 }}>
-                  <div className="form-group">
-                    <span className="form-label">Quyền sở hữu:</span>
-                    <div>
-                      {selectedDevice.owner_type === 'INTERNAL' ? (
-                        <span className="badge badge-internal">Nội bộ / Kho</span>
-                      ) : (
-                        <span className="badge badge-external">Khách: {selectedDevice.owner_party?.name || 'Khách'}</span>
-                      )}
+                {(() => {
+                  const isExp = Boolean(selectedDevice.outbound_date) || selectedDevice.owner_type === 'EXTERNAL';
+                  const isLoan = !isExp && (Boolean(selectedDevice.active_assignment) || selectedDevice.holder_type === 'EXTERNAL_PARTY');
+                  const isWar = !isExp && !isLoan && (selectedDevice.holder_type === 'SUPPLIER_WARRANTY' || Boolean(selectedDevice.active_warranty_case && selectedDevice.active_warranty_case.case_status !== 'COMPLETED'));
+                  const readiness = inventoryService.checkOutboundReadiness(selectedDevice);
+
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 4 }}>
+                      <div className="form-group">
+                        <span className="form-label">Trạng thái kho vận:</span>
+                        <div>
+                          {isExp ? (
+                            <span className="badge badge-external" style={{ fontWeight: 600 }}>🟣 Đã xuất kho</span>
+                          ) : isLoan ? (
+                            <span className="badge badge-inspection" style={{ fontWeight: 600 }}>🟡 Đang mượn / Bàn giao</span>
+                          ) : isWar ? (
+                            <span className="badge badge-warranty" style={{ fontWeight: 600 }}>🛠️ Đang bảo hành</span>
+                          ) : readiness.eligible ? (
+                            <span className="badge badge-usable" style={{ fontWeight: 600 }}>🟢 Sẵn sàng xuất</span>
+                          ) : (
+                            <span className="badge badge-faulty" style={{ fontWeight: 600 }} title={readiness.reason}>
+                              🔴 Chưa thể xuất ({selectedDevice.technical_condition === 'FAULTY' ? 'Máy lỗi' : selectedDevice.technical_condition === 'NEEDS_INSPECTION' ? 'Cần kiểm tra' : 'Chưa đủ ĐK'})
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="form-group">
+                        <span className="form-label">Bên đang giữ:</span>
+                        <div>
+                          {isExp ? (
+                            <span className="badge badge-external">
+                              {selectedDevice.holder_party?.name ? `Khách: ${selectedDevice.holder_party.name}` : selectedDevice.owner_party?.name ? `Khách: ${selectedDevice.owner_party.name}` : 'Bên ngoài (Đã xuất)'}
+                            </span>
+                          ) : isLoan ? (
+                            <span className="badge badge-inspection">
+                              {selectedDevice.active_assignment?.recipient_party?.name || selectedDevice.holder_party?.name || 'Khách/NV giữ'}
+                            </span>
+                          ) : isWar ? (
+                            <span className="badge badge-warranty">Trung tâm bảo hành</span>
+                          ) : (
+                            <span className="badge badge-storage">Đang ở kho nội bộ</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="form-group">
+                        <span className="form-label">Tình trạng kỹ thuật:</span>
+                        <div>
+                          {selectedDevice.technical_condition === 'USABLE' && <span className="badge badge-usable">Sử dụng tốt</span>}
+                          {selectedDevice.technical_condition === 'NEEDS_INSPECTION' && <span className="badge badge-inspection">Cần kiểm tra</span>}
+                          {selectedDevice.technical_condition === 'FAULTY' && <span className="badge badge-faulty">Hỏng / Lỗi</span>}
+                        </div>
+                      </div>
+
+                      <div className="form-group">
+                        <span className="form-label">Quyền sở hữu:</span>
+                        <div>
+                          {selectedDevice.owner_type === 'INTERNAL' ? (
+                            <span className="badge badge-internal">Nội bộ / Kho</span>
+                          ) : (
+                            <span className="badge badge-external">Khách: {selectedDevice.owner_party?.name || 'Khách'}</span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="form-group">
-                    <span className="form-label">Bên đang giữ:</span>
-                    <div>
-                      {selectedDevice.holder_type === 'INTERNAL_STORAGE' && <span className="badge badge-storage">Đang ở kho</span>}
-                      {selectedDevice.holder_type === 'EXTERNAL_PARTY' && (
-                        <span className="badge badge-external">
-                          {selectedDevice.holder_party?.name || 'Khách giữ'}
-                        </span>
-                      )}
-                      {selectedDevice.holder_type === 'SUPPLIER_WARRANTY' && <span className="badge badge-warranty">Trung tâm bảo hành</span>}
-                    </div>
-                  </div>
-                  <div className="form-group">
-                    <span className="form-label">Tình trạng kỹ thuật:</span>
-                    <div>
-                      {selectedDevice.technical_condition === 'USABLE' && <span className="badge badge-usable">Sử dụng tốt</span>}
-                      {selectedDevice.technical_condition === 'NEEDS_INSPECTION' && <span className="badge badge-inspection">Cần kiểm tra</span>}
-                      {selectedDevice.technical_condition === 'FAULTY' && <span className="badge badge-faulty">Hỏng / Lỗi</span>}
-                    </div>
-                  </div>
-                  <div className="form-group">
-                    <span className="form-label">Vòng đời:</span>
-                    <div>
-                      <span className="badge badge-storage">{selectedDevice.lifecycle}</span>
-                    </div>
-                  </div>
-                </div>
+                  );
+                })()}
 
                 {/* Lịch sử Ngày Nhập / Xuất kho */}
                 <div style={{ background: 'var(--bg-input)', padding: 12, borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -3030,8 +3081,8 @@ export default function HomePage() {
 
                 <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
                   {(() => {
-                    const storageCount = devices.filter((d) => !d.outbound_date && d.holder_type === 'INTERNAL_STORAGE').length;
-                    const exportedCount = devices.filter((d) => !!d.outbound_date || d.holder_type !== 'INTERNAL_STORAGE').length;
+                    const storageCount = devices.filter((d) => !d.outbound_date && d.owner_type !== 'EXTERNAL' && !d.active_assignment && d.holder_type === 'INTERNAL_STORAGE').length;
+                    const exportedCount = devices.filter((d) => !!d.outbound_date || d.owner_type === 'EXTERNAL').length;
                     const now = new Date();
                     const thisMonthCount = devices.filter((d) => {
                       const inDate = d.inbound_date || d.inbound_receipt?.received_date || d.created_at;
@@ -3039,16 +3090,16 @@ export default function HomePage() {
                       const dt = new Date(inDate);
                       return dt.getFullYear() === now.getFullYear() && dt.getMonth() === now.getMonth();
                     }).length;
-                    const externalCount = devices.filter((d) => d.holder_type === 'EXTERNAL_PARTY').length;
-                    const warrantyCount = devices.filter((d) => d.holder_type === 'SUPPLIER_WARRANTY' || !!d.active_warranty_case).length;
+                    const externalCount = devices.filter((d) => !d.outbound_date && d.owner_type !== 'EXTERNAL' && (d.holder_type === 'EXTERNAL_PARTY' || !!d.active_assignment)).length;
+                    const warrantyCount = devices.filter((d) => !d.outbound_date && (d.holder_type === 'SUPPLIER_WARRANTY' || (!!d.active_warranty_case && d.active_warranty_case.case_status !== 'COMPLETED'))).length;
                     const faultyCount = devices.filter((d) => d.technical_condition !== 'USABLE').length;
 
                     return [
                       { key: 'ALL', label: `Tất cả (${devices.length})` },
-                      { key: 'STORAGE', label: `🟢 Chưa xuất (${storageCount})` },
-                      { key: 'EXPORTED', label: `🟣 Đã xuất (${exportedCount})` },
+                      { key: 'STORAGE', label: `🟢 Trong kho (${storageCount})` },
+                      { key: 'EXPORTED', label: `🟣 Đã xuất kho (${exportedCount})` },
                       { key: 'THIS_MONTH', label: `📅 Nhập tháng này (${thisMonthCount})` },
-                      { key: 'EXTERNAL', label: `🟡 Đang mượn / Khách (${externalCount})` },
+                      { key: 'EXTERNAL', label: `🟡 Đang mượn / Bàn giao (${externalCount})` },
                       { key: 'WARRANTY', label: `🛠️ Đang bảo hành (${warrantyCount})` },
                       { key: 'NEEDS_INSPECTION', label: `🔴 Cần kiểm tra / Lỗi (${faultyCount})` },
                     ].map((f) => (
@@ -3167,16 +3218,21 @@ export default function HomePage() {
                       {/* Pill con số chi tiết */}
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: '0.73rem', paddingLeft: 20 }}>
                         <span style={{ color: 'var(--success)' }}>
-                          🟢 {group.inStorageCount} tại kho
+                          🟢 {group.inStorageCount} trong kho
                         </span>
+                        {group.exportedCount > 0 && (
+                          <span style={{ color: 'var(--purple)' }}>
+                            🟣 {group.exportedCount} đã xuất
+                          </span>
+                        )}
                         {group.externalCount > 0 && (
                           <span style={{ color: 'var(--warning)' }}>
                             🟡 {group.externalCount} khách/mượn
                           </span>
                         )}
                         {group.warrantyCount > 0 && (
-                          <span style={{ color: 'var(--purple)' }}>
-                            🟣 {group.warrantyCount} đang BH
+                          <span style={{ color: '#ec4899' }}>
+                            🛠️ {group.warrantyCount} đang BH
                           </span>
                         )}
                         {group.needsInspectionCount > 0 && (
@@ -3201,6 +3257,9 @@ export default function HomePage() {
                         }}
                       >
                         {group.items.map((dev) => {
+                          const isExported = Boolean(dev.outbound_date) || dev.owner_type === 'EXTERNAL';
+                          const isOnLoan = !isExported && (Boolean(dev.active_assignment) || dev.holder_type === 'EXTERNAL_PARTY');
+                          const isInWarranty = !isExported && !isOnLoan && (dev.holder_type === 'SUPPLIER_WARRANTY' || Boolean(dev.active_warranty_case && dev.active_warranty_case.case_status !== 'COMPLETED'));
                           const readiness = inventoryService.checkOutboundReadiness(dev);
                           const photoUrl = dev.photo_url || 
                             (dev.evidence_photos && dev.evidence_photos.length > 0
@@ -3319,30 +3378,59 @@ export default function HomePage() {
 
                               {/* Badges trạng thái */}
                               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                                <span className="badge badge-storage">
-                                  {dev.holder_type === 'INTERNAL_STORAGE' && 'Tại kho'}
-                                  {dev.holder_type === 'EXTERNAL_PARTY' && (dev.holder_party?.name ? `Khách: ${dev.holder_party.name}` : 'Bên ngoài')}
-                                  {dev.holder_type === 'SUPPLIER_WARRANTY' && 'Tại TTBH / NCC'}
-                                </span>
-
-                                <span className={`badge ${dev.technical_condition === 'USABLE' ? 'badge-usable' : 'badge-faulty'}`}>
-                                  {dev.technical_condition === 'USABLE' && 'Sử dụng tốt'}
-                                  {dev.technical_condition === 'NEEDS_INSPECTION' && 'Cần kiểm tra'}
-                                  {dev.technical_condition === 'FAULTY' && 'Lỗi'}
-                                </span>
-
-                                {readiness.eligible ? (
-                                  <span className="badge badge-usable">Sẵn sàng xuất</span>
+                                {/* 1. Trạng thái Vận hành / Xuất kho */}
+                                {isExported ? (
+                                  <span className="badge badge-external" style={{ fontWeight: 600 }}>
+                                    🟣 Đã xuất kho
+                                  </span>
+                                ) : isOnLoan ? (
+                                  <span className="badge badge-inspection" style={{ fontWeight: 600 }}>
+                                    🟡 Đang mượn / Bàn giao
+                                  </span>
+                                ) : isInWarranty ? (
+                                  <span className="badge badge-warranty" style={{ fontWeight: 600 }}>
+                                    🛠️ Đang bảo hành {dev.active_warranty_case ? `(${dev.active_warranty_case.code})` : ''}
+                                  </span>
+                                ) : readiness.eligible ? (
+                                  <span className="badge badge-usable" style={{ fontWeight: 600 }} title="Thiết bị nguyên vẹn tại kho, sẵn sàng xuất ngay">
+                                    🟢 Sẵn sàng xuất
+                                  </span>
                                 ) : (
-                                  <span className="badge badge-inspection">Chưa thể xuất</span>
-                                )}
-
-                                {dev.active_warranty_case && (
-                                  <span className="badge badge-warranty">
-                                    Đang BH: {dev.active_warranty_case.code}
+                                  <span
+                                    className="badge badge-faulty"
+                                    style={{ fontWeight: 600 }}
+                                    title={readiness.reason || 'Chưa đủ điều kiện xuất'}
+                                  >
+                                    🔴 Chưa thể xuất ({dev.technical_condition === 'FAULTY' ? 'Máy lỗi' : dev.technical_condition === 'NEEDS_INSPECTION' ? 'Cần kiểm tra' : (readiness.reason || 'Chưa đủ ĐK')})
                                   </span>
                                 )}
 
+                                {/* 2. Vị trí vật lý / Bên đang giữ */}
+                                <span className="badge badge-storage">
+                                  {isExported
+                                    ? (dev.holder_party?.name ? `Khách: ${dev.holder_party.name}` : dev.owner_party?.name ? `Khách: ${dev.owner_party.name}` : 'Bên ngoài (Đã xuất)')
+                                    : isOnLoan
+                                    ? (dev.active_assignment?.recipient_party?.name ? `Mượn: ${dev.active_assignment.recipient_party.name}` : dev.holder_party?.name ? `Mượn: ${dev.holder_party.name}` : 'Đang cho mượn')
+                                    : isInWarranty
+                                    ? 'Tại TTBH / Nhà cung cấp'
+                                    : 'Tại kho nội bộ'}
+                                </span>
+
+                                {/* 3. Tình trạng kỹ thuật */}
+                                <span className={`badge ${dev.technical_condition === 'USABLE' ? 'badge-usable' : 'badge-faulty'}`}>
+                                  {dev.technical_condition === 'USABLE' && 'Sử dụng tốt'}
+                                  {dev.technical_condition === 'NEEDS_INSPECTION' && 'Cần kiểm tra'}
+                                  {dev.technical_condition === 'FAULTY' && 'Lỗi / Hỏng'}
+                                </span>
+
+                                {/* 4. Hồ sơ bảo hành phụ nếu có */}
+                                {dev.active_warranty_case && !isInWarranty && (
+                                  <span className="badge badge-warranty">
+                                    HS: {dev.active_warranty_case.code}
+                                  </span>
+                                )}
+
+                                {/* 5. Nút thu hồi nếu đang mượn */}
                                 {dev.active_assignment && (
                                   <button
                                     className="btn btn-warning"
@@ -4712,8 +4800,8 @@ export default function HomePage() {
               </div>
               <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                 <span>Tổng: <strong style={{ color: '#f8fafc' }}>{groupedInventoryModels.flatMap(g => g.items).length}</strong> thiết bị</span>
-                <span>• Trong kho: <strong style={{ color: '#86efac' }}>{groupedInventoryModels.flatMap(g => g.items).filter(d => !d.outbound_date).length}</strong></span>
-                <span>• Đã xuất: <strong style={{ color: '#c084fc' }}>{groupedInventoryModels.flatMap(g => g.items).filter(d => !!d.outbound_date).length}</strong></span>
+                <span>• Trong kho: <strong style={{ color: '#86efac' }}>{groupedInventoryModels.flatMap(g => g.items).filter(d => !d.outbound_date && d.owner_type !== 'EXTERNAL' && !d.active_assignment && d.holder_type === 'INTERNAL_STORAGE').length}</strong></span>
+                <span>• Đã xuất: <strong style={{ color: '#c084fc' }}>{groupedInventoryModels.flatMap(g => g.items).filter(d => !!d.outbound_date || d.owner_type === 'EXTERNAL').length}</strong></span>
               </div>
             </div>
 
