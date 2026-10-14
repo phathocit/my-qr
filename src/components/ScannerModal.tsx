@@ -438,10 +438,11 @@ export default function ScannerModal({
     const rawCropX = rawCropCenterX - rawCropW / 2;
     const rawCropY = rawCropCenterY - rawCropH / 2;
 
-    // Lề đệm Quiet Zone tối thiểu 6% để đầu đọc đọc được thanh vạch đầu cuối
-    // KHÔNG mở rộng ra ngoài khung ngắm
-    const padW = rawCropW * 0.06;
-    const padH = rawCropH * 0.06;
+    // Lề đệm an toàn: 12% chiều ngang, 18% chiều dọc
+    // Đảm bảo các mã vạch bị nghiêng góc hoặc sát mép khung ngắm vẫn đọc được tức thì
+    // nhưng chặn hoàn toàn các mã ở nền xung quanh
+    const padW = rawCropW * 0.12;
+    const padH = rawCropH * 0.18;
 
     const cropX = Math.max(0, Math.floor(rawCropX - padW));
     const cropY = Math.max(0, Math.floor(rawCropY - padH));
@@ -476,8 +477,8 @@ export default function ScannerModal({
 
     let totalFrames = 0;
     let lastFrameTime = 0;
-    // Pacing tối ưu 80ms (~12.5 FPS): Đủ nhanh để nhận mã trong 80ms nhưng giảm 75% nhiệt và pin
-    const FRAME_PACING_MS = 80;
+    // Pacing 35ms (~28 FPS): Phản hồi tức thì "quét cái ăn ngay" mà vẫn giữ nhiệt độ máy ổn định
+    const FRAME_PACING_MS = 35;
 
     const processFrame = async () => {
       // Luôn bảo đảm vòng lặp RAF sống chừng nào modal còn mở
@@ -527,15 +528,14 @@ export default function ScannerModal({
         if (vw > 0 && vh > 0) {
           metricsRef.current.actualResolution = `${vw}x${vh}`;
 
-          // Tính toán ROI chuẩn xác tuyệt đối theo khung ngắm trên màn hình
+          // Tính toán ROI chuẩn xác theo khung ngắm trên màn hình
           const roi = calculateExactRoi();
           if (!roi) {
             scheduleNextFrame();
             return;
           }
 
-          // Cắt ĐÚNG vùng trong khung ngắm vào canvas
-          // Giới hạn max width 720px: Giữ nguyên độ nét 1:1 cho tem vạch siêu nhỏ mà tốn cực ít RAM & GPU
+          // Cắt vùng khung ngắm vào canvas phục vụ chụp ảnh bằng chứng & ZXing WASM
           const tCropStart = performance.now();
           const targetW = Math.min(roi.cropW, 720);
           const targetH = Math.round((targetW / roi.cropW) * roi.cropH);
@@ -547,22 +547,52 @@ export default function ScannerModal({
           const cropDuration = Math.round((performance.now() - tCropStart) * 10) / 10;
           metricsRef.current.cropTimeMs = cropDuration;
 
-          // ── BƯỚC 1: HARDWARE NATIVE BARCODE DETECTOR (NẾU HỖ TRỢ TRÊN THIẾT BỊ) ──
-          // TUYỆT ĐỐI chỉ quét trên canvas đã được crop theo khung ngắm
-          // Không bao giờ quét full video để tránh nhận diện mã vạch bên ngoài
+          // ── BƯỚC 1: HARDWARE NATIVE BARCODE DETECTOR (SIÊU NHẠY VỚI GPU/NPU) ──
+          // Quét phần cứng trực tiếp từ live video stream để đạt độ nhạy tối đa (1-3ms)
+          // LỌC THÔNG MINH BẰNG BOUNDING BOX: Chỉ chấp nhận mã có tâm nằm trong khung ngắm ROI
           if (nativeBarcodeDetector) {
             try {
               const tNativeStart = performance.now();
-              const detections = await nativeBarcodeDetector.detect(canvas);
+              const detections = await nativeBarcodeDetector.detect(video);
 
-              if (detections && detections.length > 0 && detections[0]?.rawValue) {
-                const detectDuration = Math.round((performance.now() - tNativeStart) * 10) / 10;
-                metricsRef.current.decodeTimeMs = detectDuration;
-                metricsRef.current.activeGear = 'fast';
+              if (detections && detections.length > 0) {
+                // Lọc những mã có tâm nằm trong phạm vi khung ngắm trực quan
+                const validDetections = detections.filter((d: any) => {
+                  if (!d.boundingBox) return true;
+                  const { x, y, width, height } = d.boundingBox;
+                  const cx = x + width / 2;
+                  const cy = y + height / 2;
+                  return (
+                    cx >= roi.cropX &&
+                    cx <= roi.cropX + roi.cropW &&
+                    cy >= roi.cropY &&
+                    cy <= roi.cropY + roi.cropH
+                  );
+                });
 
-                const exactPhoto = canvas.toDataURL('image/jpeg', 0.85);
-                onCodeFound(detections[0].rawValue, detections[0].format || 'BARCODE', exactPhoto);
-                return;
+                if (validDetections.length > 0) {
+                  // Nếu có nhiều mã trong khung: Ưu tiên mã gần tâm vệt laser đỏ nhất
+                  const roiCenterX = roi.cropX + roi.cropW / 2;
+                  const roiCenterY = roi.cropY + roi.cropH / 2;
+                  validDetections.sort((a: any, b: any) => {
+                    const aBox = a.boundingBox || { x: roiCenterX, y: roiCenterY, width: 0, height: 0 };
+                    const bBox = b.boundingBox || { x: roiCenterX, y: roiCenterY, width: 0, height: 0 };
+                    const distA = Math.hypot((aBox.x + aBox.width / 2) - roiCenterX, (aBox.y + aBox.height / 2) - roiCenterY);
+                    const distB = Math.hypot((bBox.x + bBox.width / 2) - roiCenterX, (bBox.y + bBox.height / 2) - roiCenterY);
+                    return distA - distB;
+                  });
+
+                  const bestMatch = validDetections[0];
+                  if (bestMatch?.rawValue) {
+                    const detectDuration = Math.round((performance.now() - tNativeStart) * 10) / 10;
+                    metricsRef.current.decodeTimeMs = detectDuration;
+                    metricsRef.current.activeGear = 'fast';
+
+                    const exactPhoto = canvas.toDataURL('image/jpeg', 0.85);
+                    onCodeFound(bestMatch.rawValue, bestMatch.format || 'BARCODE', exactPhoto);
+                    return;
+                  }
+                }
               }
             } catch {
               // Tiếp tục fallback sang WASM bên dưới
@@ -574,10 +604,8 @@ export default function ScannerModal({
             const imageData = ctx.getImageData(0, 0, targetW, targetH);
 
             const elapsedSinceStart = performance.now() - scanStartTimestampRef.current;
-            // Chiến thuật phân tầng thông minh (Tiered):
-            // - Giai đoạn 1 (nhanh / mát máy): Dùng tryHarder: false, GlobalHistogram. Mã rõ nét đọc tức thì trong 2-5ms mà không tốn pin.
-            // - Giai đoạn 2 (sâu / mã khó): Chỉ kích hoạt khi quét trên 1.2s hoặc mỗi 4 frame một lần.
-            const isDeepAttempt = elapsedSinceStart > 1200 || (totalFrames > 6 && totalFrames % 4 === 0);
+            // Phân tầng thông minh: Giai đoạn 1 siêu nhanh, giai đoạn 2 kích hoạt sau 800ms
+            const isDeepAttempt = elapsedSinceStart > 800 || (totalFrames > 4 && totalFrames % 3 === 0);
             metricsRef.current.activeGear = isDeepAttempt ? 'deep' : 'fast';
 
             const targetFormats = formatModeRef.current === 'serial' ? HARDWARE_SERIAL_FORMATS : ALL_COMMON_FORMATS;
