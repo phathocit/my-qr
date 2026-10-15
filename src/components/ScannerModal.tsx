@@ -191,6 +191,7 @@ function playScannerBeep() {
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
+    osc.onended = () => { void ctx.close(); };
     osc.stop(ctx.currentTime + 0.08);
   } catch {}
 }
@@ -244,6 +245,8 @@ export default function ScannerModal({
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const viewfinderBoxRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const cameraSessionRef = useRef(0);
+  const cameraControlBusyRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Cờ điều khiển decode in-flight (Tuyệt đối không xếp hàng frame cũ)
@@ -255,7 +258,9 @@ export default function ScannerModal({
   const zoomLevelRef = useRef<number>(1);
   const isHardwareZoomActiveRef = useRef<boolean>(false);
   const formatModeRef = useRef<'serial' | 'all'>('serial');
-  formatModeRef.current = formatMode;
+  useEffect(() => {
+    formatModeRef.current = formatMode;
+  }, [formatMode]);
 
   // Timers đo lường độc lập
   const scanStartTimestampRef = useRef<number>(0);
@@ -289,6 +294,7 @@ export default function ScannerModal({
 
   // ─── Dừng camera & giải phóng tài nguyên ─────────────────────────────────
   const stopCamera = useCallback(() => {
+    cameraSessionRef.current++;
     scanLoopActiveRef.current = false;
     isDecodingRef.current = false;
 
@@ -341,6 +347,7 @@ export default function ScannerModal({
       }
       lastDetectedCodeRef.current = { code: trimmed, timestamp: now };
 
+      const session = cameraSessionRef.current;
       isHandlingDetectionRef.current = true;
       setScanIdleSeconds(0);
 
@@ -366,6 +373,7 @@ export default function ScannerModal({
         if (exists) {
           setContinuousToast(`⚠️ Đã có trong danh sách: ${trimmed}`);
           setTimeout(() => {
+            if (cameraSessionRef.current !== session) return;
             setContinuousToast(null);
             scanStartTimestampRef.current = performance.now();
             isHandlingDetectionRef.current = false;
@@ -385,6 +393,7 @@ export default function ScannerModal({
 
         // Cooldown siêu nhạy 350ms: Sẵn sàng quét mã tiếp theo
         setTimeout(() => {
+          if (cameraSessionRef.current !== session) return;
           setContinuousToast(null);
           scanStartTimestampRef.current = performance.now();
           isHandlingDetectionRef.current = false;
@@ -455,13 +464,16 @@ export default function ScannerModal({
   }, []);
 
   // ─── VÒNG QUÉT KÉP: NATIVE BARCODE DETECTOR + ZXING C++ WASM ────────
-  const startScanLoop = useCallback(async () => {
+  const startScanLoop = useCallback(async (session: number) => {
+    const isCurrentSession = () => cameraSessionRef.current === session && scanLoopActiveRef.current;
+    if (cameraSessionRef.current !== session) return;
     scanLoopActiveRef.current = true;
     isDecodingRef.current = false;
     isHandlingDetectionRef.current = false;
 
     // 1. Khởi tạo WASM module
     const wasmResult = await getOrPreloadWasm();
+    if (!isCurrentSession()) return;
     const { readBarcodesFromImageData, initDurationMs } = wasmResult;
     metricsRef.current.wasmInitMs = initDurationMs;
 
@@ -482,10 +494,10 @@ export default function ScannerModal({
 
     const processFrame = async () => {
       // Luôn bảo đảm vòng lặp RAF sống chừng nào modal còn mở
-      if (!scanLoopActiveRef.current) return;
+      if (!isCurrentSession()) return;
 
       const scheduleNextFrame = () => {
-        if (scanLoopActiveRef.current) {
+        if (isCurrentSession()) {
           animationFrameRef.current = requestAnimationFrame(processFrame);
         }
       };
@@ -530,10 +542,7 @@ export default function ScannerModal({
 
           // Tính toán ROI chuẩn xác theo khung ngắm trên màn hình
           const roi = calculateExactRoi();
-          if (!roi) {
-            scheduleNextFrame();
-            return;
-          }
+          if (!roi) return;
 
           // Cắt vùng khung ngắm vào canvas phục vụ chụp ảnh bằng chứng & ZXing WASM
           const tCropStart = performance.now();
@@ -548,12 +557,13 @@ export default function ScannerModal({
           metricsRef.current.cropTimeMs = cropDuration;
 
           // ── BƯỚC 1: HARDWARE NATIVE BARCODE DETECTOR (SIÊU NHẠY VỚI GPU/NPU) ──
-          // Quét phần cứng trực tiếp từ live video stream để đạt độ nhạy tối đa (1-3ms)
+          // Dùng cùng ảnh ROI cho nhận diện native và ảnh bằng chứng.
           // LỌC THÔNG MINH BẰNG BOUNDING BOX: Chỉ chấp nhận mã có tâm nằm trong khung ngắm ROI
           if (nativeBarcodeDetector) {
             try {
               const tNativeStart = performance.now();
-              const detections = await nativeBarcodeDetector.detect(video);
+              const detections = await nativeBarcodeDetector.detect(canvas);
+              if (!isCurrentSession()) return;
 
               if (detections && detections.length > 0) {
                 // Lọc những mã có tâm nằm trong phạm vi khung ngắm trực quan
@@ -563,17 +573,15 @@ export default function ScannerModal({
                   const cx = x + width / 2;
                   const cy = y + height / 2;
                   return (
-                    cx >= roi.cropX &&
-                    cx <= roi.cropX + roi.cropW &&
-                    cy >= roi.cropY &&
-                    cy <= roi.cropY + roi.cropH
+                    cx >= 0 && cx <= targetW &&
+                    cy >= 0 && cy <= targetH
                   );
                 });
 
                 if (validDetections.length > 0) {
                   // Nếu có nhiều mã trong khung: Ưu tiên mã gần tâm vệt laser đỏ nhất
-                  const roiCenterX = roi.cropX + roi.cropW / 2;
-                  const roiCenterY = roi.cropY + roi.cropH / 2;
+                  const roiCenterX = targetW / 2;
+                  const roiCenterY = targetH / 2;
                   validDetections.sort((a: any, b: any) => {
                     const aBox = a.boundingBox || { x: roiCenterX, y: roiCenterY, width: 0, height: 0 };
                     const bBox = b.boundingBox || { x: roiCenterX, y: roiCenterY, width: 0, height: 0 };
@@ -599,6 +607,8 @@ export default function ScannerModal({
             }
           }
 
+          if (!isCurrentSession()) return;
+
           // ── BƯỚC 2: ZXING C++ WASM ENGINE (KHÓA CHẶT TRONG KHUNG NGẮM) ──
           if (readBarcodesFromImageData) {
             const imageData = ctx.getImageData(0, 0, targetW, targetH);
@@ -621,6 +631,7 @@ export default function ScannerModal({
               maxNumberOfSymbols: 1,
             });
 
+            if (!isCurrentSession()) return;
             const decodeDuration = Math.round((performance.now() - tDecodeStart) * 10) / 10;
             metricsRef.current.decodeTimeMs = decodeDuration;
 
@@ -639,8 +650,10 @@ export default function ScannerModal({
       } catch {
         // Bỏ qua lỗi frame đơn lẻ
       } finally {
-        isDecodingRef.current = false;
-        scheduleNextFrame();
+        if (isCurrentSession()) {
+          isDecodingRef.current = false;
+          scheduleNextFrame();
+        }
       }
     };
 
@@ -651,6 +664,9 @@ export default function ScannerModal({
   const startCamera = useCallback(
     async (specificDeviceId?: string) => {
       stopCamera();
+      const session = cameraSessionRef.current;
+      const isCurrentSession = () => cameraSessionRef.current === session;
+      let acquiredStream: MediaStream | null = null;
 
       setCameraError(null);
       setIsLoadingCamera(true);
@@ -658,6 +674,12 @@ export default function ScannerModal({
       isHandlingDetectionRef.current = false;
 
       const tCameraStart = performance.now();
+
+      if (!window.isSecureContext) {
+        setCameraError('Camera cần HTTPS hoặc localhost. Hãy mở ứng dụng qua địa chỉ HTTPS.');
+        setIsLoadingCamera(false);
+        return;
+      }
 
       // Kiểm tra hỗ trợ MediaDevices
       if (!navigator?.mediaDevices?.getUserMedia) {
@@ -671,13 +693,15 @@ export default function ScannerModal({
           video: specificDeviceId
             ? {
                 deviceId: { exact: specificDeviceId },
-                width: { ideal: 1280, max: 1920, min: 720 },
-                height: { ideal: 720, max: 1080, min: 480 },
+                width: { ideal: 1280, max: 1920 },
+                height: { ideal: 720, max: 1080 },
+                frameRate: { ideal: 24, max: 30 },
               }
             : {
                 facingMode: { ideal: 'environment' },
-                width: { ideal: 1280, max: 1920, min: 720 },
-                height: { ideal: 720, max: 1080, min: 480 },
+                width: { ideal: 1280, max: 1920 },
+                height: { ideal: 720, max: 1080 },
+                frameRate: { ideal: 24, max: 30 },
               },
           audio: false,
         };
@@ -685,19 +709,32 @@ export default function ScannerModal({
         let stream: MediaStream;
         try {
           stream = await navigator.mediaDevices.getUserMedia(constraints);
-        } catch {
+        } catch (error) {
+          if (!isCurrentSession()) return;
+          if (!(error instanceof DOMException) || error.name !== 'OverconstrainedError') throw error;
           stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: 'environment' } },
+            video: specificDeviceId
+              ? { deviceId: { exact: specificDeviceId } }
+              : { facingMode: { ideal: 'environment' } },
             audio: false,
           });
         }
 
+        acquiredStream = stream;
+        if (!isCurrentSession()) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
         streamRef.current = stream;
 
         // Lấy danh sách camera thực tế
         try {
           const devices = await navigator.mediaDevices.enumerateDevices();
-          setAvailableDevices(devices.filter((d) => d.kind === 'videoinput'));
+          if (!isCurrentSession()) return;
+          const cameras = devices.filter((d) => d.kind === 'videoinput');
+          setAvailableDevices(cameras);
+          const actualDeviceId = stream.getVideoTracks()[0]?.getSettings().deviceId;
+          setCurrentDeviceIndex(Math.max(0, cameras.findIndex((d) => d.deviceId === actualDeviceId)));
         } catch {}
 
         // Kiểm tra capabilities THỰC TẾ của camera (Torch, Zoom, Focus)
@@ -737,9 +774,10 @@ export default function ScannerModal({
           } catch {}
         }
 
+        if (!isCurrentSession()) return;
         const videoEl = videoRef.current;
         if (!videoEl) {
-          setIsLoadingCamera(false);
+          stopCamera();
           return;
         }
 
@@ -751,6 +789,12 @@ export default function ScannerModal({
         videoEl.srcObject = stream;
 
         await videoEl.play();
+        if (!isCurrentSession()) return;
+        videoTrack?.addEventListener('ended', () => {
+          if (!isCurrentSession()) return;
+          stopCamera();
+          setCameraError('Camera đã ngắt kết nối. Hãy bấm Thử lại.');
+        }, { once: true });
 
         // Ghi nhận thời gian mở camera độc lập
         metricsRef.current.cameraOpenMs = Math.round(performance.now() - tCameraStart);
@@ -760,8 +804,11 @@ export default function ScannerModal({
         setCameraActive(true);
 
         // Bắt đầu vòng quét WASM
-        startScanLoop();
+        void startScanLoop(session);
       } catch (err: any) {
+        acquiredStream?.getTracks().forEach((track) => track.stop());
+        if (!isCurrentSession()) return;
+        stopCamera();
         console.error('Lỗi getUserMedia:', err);
         setIsLoadingCamera(false);
         setCameraActive(false);
@@ -780,43 +827,52 @@ export default function ScannerModal({
   // ─── Bật / Tắt Đèn pin (Torch) ───────────────────────────────────────────
   const handleToggleTorch = async () => {
     const track = streamRef.current?.getVideoTracks()[0];
-    if (!track || !hasTorch) return;
+    if (!track || !hasTorch || cameraControlBusyRef.current) return;
+    const session = cameraSessionRef.current;
+    cameraControlBusyRef.current = true;
     try {
       const nextState = !isTorchOn;
       await track.applyConstraints({
         advanced: [{ torch: nextState } as any],
       });
-      setIsTorchOn(nextState);
+      if (cameraSessionRef.current === session) setIsTorchOn(nextState);
     } catch (e) {
       console.warn('Lỗi bật đèn pin:', e);
+    } finally {
+      cameraControlBusyRef.current = false;
     }
   };
 
   // ─── Phóng to 1x / 2x (Hỗ trợ cả Hardware Zoom & Software High-Res Digital Zoom) ───
   const handleSetZoom = async (targetLevel: number) => {
-    const nextZoom = targetLevel === 2 ? 2 : 1;
-    zoomLevelRef.current = nextZoom;
-    setZoomLevel(nextZoom);
-
+    if (cameraControlBusyRef.current) return;
     const track = streamRef.current?.getVideoTracks()[0];
-    if (track && hasZoom) {
-      try {
-        const hardwareZoomVal = nextZoom === 2 ? Math.min(2, zoomMinMax.max) : (zoomMinMax.min || 1);
-        await (track as any).applyConstraints({
-          advanced: [{ zoom: hardwareZoomVal }],
-        });
-        const hwActive = nextZoom > 1;
-        isHardwareZoomActiveRef.current = hwActive;
-        setIsHardwareZoomActive(hwActive);
-        return;
-      } catch (e) {
-        console.warn('Lỗi đổi zoom phần cứng, tự động fallback sang zoom kỹ thuật số:', e);
-        isHardwareZoomActiveRef.current = false;
-        setIsHardwareZoomActive(false);
+    if (!track) return;
+    const session = cameraSessionRef.current;
+    const nextZoom = targetLevel === 2 ? 2 : 1;
+    cameraControlBusyRef.current = true;
+    try {
+      let hardwareActive = false;
+      if (hasZoom) {
+        const rawZoom = nextZoom === 2 ? Math.min(2, zoomMinMax.max) : zoomMinMax.min;
+        const steppedZoom = zoomMinMax.min + Math.round((rawZoom - zoomMinMax.min) / zoomMinMax.step) * zoomMinMax.step;
+        const hardwareZoom = Math.max(zoomMinMax.min, Math.min(zoomMinMax.max, steppedZoom));
+        try {
+          await track.applyConstraints({ advanced: [{ zoom: hardwareZoom } as any] });
+          hardwareActive = nextZoom > 1 && hardwareZoom > zoomMinMax.min;
+        } catch (error) {
+          // Preserve the current display when a hardware reset fails.
+          if (isHardwareZoomActiveRef.current) return;
+          console.warn('Không áp dụng được zoom phần cứng:', error);
+        }
       }
-    } else {
-      isHardwareZoomActiveRef.current = false;
-      setIsHardwareZoomActive(false);
+      if (cameraSessionRef.current !== session) return;
+      zoomLevelRef.current = nextZoom;
+      isHardwareZoomActiveRef.current = hardwareActive;
+      setZoomLevel(nextZoom);
+      setIsHardwareZoomActive(hardwareActive);
+    } finally {
+      cameraControlBusyRef.current = false;
     }
   };
 
@@ -840,13 +896,20 @@ export default function ScannerModal({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    stopCamera();
+    const session = cameraSessionRef.current;
     setIsLoadingCamera(true);
     setCameraError(null);
-    stopCamera();
 
     try {
       const reader = new FileReader();
+      reader.onerror = () => {
+        if (cameraSessionRef.current !== session) return;
+        setIsLoadingCamera(false);
+        setCameraError('Không thể đọc file ảnh.');
+      };
       reader.onload = async (evt) => {
+        if (cameraSessionRef.current !== session) return;
         const photoDataUrl = evt.target?.result as string;
 
         try {
@@ -860,6 +923,7 @@ export default function ScannerModal({
             tryDownscale: true,
           });
 
+          if (cameraSessionRef.current !== session) return;
           setIsLoadingCamera(false);
           if (results && results.length > 0 && results[0]?.text) {
             onCodeFound(results[0].text, results[0].format, photoDataUrl);
@@ -867,6 +931,7 @@ export default function ScannerModal({
             setCameraError('Không tìm thấy mã vạch trong ảnh chụp. Hãy chụp lại gần hơn và rõ nét các vạch.');
           }
         } catch (scanErr) {
+          if (cameraSessionRef.current !== session) return;
           console.warn('Lỗi quét file:', scanErr);
           setIsLoadingCamera(false);
           setCameraError('Không nhận diện được mã vạch. Hãy chụp lại ở cự ly gần và đủ sáng.');
@@ -1196,7 +1261,7 @@ export default function ScannerModal({
                     maxWidth: '92%',
                   }}
                 >
-                  {scanIdleSeconds < 3 && '🎯 Quét toàn màn hình • Giữ cách tem 15-25cm • Bấm nút [2x] nếu tem nhỏ'}
+                  {scanIdleSeconds < 3 && '🎯 Đưa mã vào khung • Giữ cách tem 15-25cm • Bấm nút [2x] nếu tem nhỏ'}
                   {scanIdleSeconds >= 3 && scanIdleSeconds < 6 && '💡 Thử bấm nút [2x] ở góc phải để phóng to mã vạch'}
                   {scanIdleSeconds >= 6 && '⚡ Tem bóng/lóa? Nghiêng nhẹ máy hoặc bấm [📷 Chụp ảnh bằng máy]'}
                 </div>
@@ -1408,6 +1473,7 @@ export default function ScannerModal({
               type="button"
               className="btn btn-secondary"
               style={{ flex: 1, minWidth: 95, fontSize: '0.85rem', padding: '8px 10px' }}
+              disabled={isLoadingCamera}
               onClick={handleCycleCamera}
               title="Đổi camera trước / sau hoặc ống kính khác"
             >
